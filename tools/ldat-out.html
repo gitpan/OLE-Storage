@@ -1,0 +1,112 @@
+<html><head><title>FYI: LAOLA file system, Oct/25/97</title></head>
+<body bgcolor="#ffffff" link="#0000ff" alink="#ff0000" vlink="#0000c0">
+&nbsp;<p><H1 align=left><font color=#7f007f>LAOLA</font></H1>
+
+<H3>Sample output of "ldat"</H3>
+The considered document <a href="http://www.microsoft.com/VBASIC/techinfo/LEGACY1.doc">LEGACY1.doc</A> (414 KB) lies at Microsoft<p>
+&nbsp;<br>
+kir:> <b>ls -l LEGACY1.doc</b><pre>
+-rw-r--r--   1 schwartz users      423424 Mar  9  1997 LEGACY1.doc</pre><p>
+kir:> <br>
+kir:> <b>ldat LEGACY1.doc</b><pre>
+Processing "LEGACY1.doc":
+
+# Microsoft Word Document (Word.Document.6, 13.11.1995, 23:19:25, rev 24)
+  Title: Wrapping Legacy Code With Visual Basic Objects
+  Authress: Martha Maroney (former: jonettat)
+  Organization: Microsoft Corporation
+  Application: Microsoft Word for Windows 95
+  Template: online
+  Created: 31.08.1995, 01:35:00
+  Last saved: 13.11.1995, 23:19:00
+        # Microsoft PowerPoint Slide (PowerPoint.Slide.7, 28.09.1995, 20:06:30)
+        # MS PowerPoint 4.0 Slide (PowerPoint.Slide.4, 28.09.1995, 20:06:29)
+        # MS PowerPoint 4.0 Slide (PowerPoint.Slide.4, 28.09.1995, 20:06:29)
+        # MS PowerPoint 4.0 Slide (PowerPoint.Slide.4, 28.09.1995, 20:06:28)
+
+</pre><p>
+kir:> <br>
+kir:> <b>ldat -d LEGACY1.doc</b><pre>
+Processing "LEGACY1.doc":
+
+--- PSet "DocumentSummaryInformation" --------------------------------
+ n id   id_name               vartype       contents
+ 1 4    Bytes                  3 (i4)       406528
+ 2 5    Lines                  3 (i4)       250
+ 3 6    Paragraphs             3 (i4)       60
+ 4 b    ScaleCrop              b (bool)     No
+ 5 c    HeadingPairs        100c (variant[]) 
+   c.01                       1e (lpstr)    Wrapping Legacy Code With Visual Basic Objects
+   c.02                        3 (i4)       0
+ 6 f    Company               1e (lpstr)    Microsoft Corporation
+ 7 10   LinksUpToDate          b (bool)     No
+----------------------------------------------------------------------
+--- PSet "SummaryInformation" ----------------------------------------
+ n id   id_name               vartype       contents
+ 1 2    Title                 1e (lpstr)    Wrapping Legacy Code With Visual Basic Objects
+ 2 3    Subject               1e (lpstr)    
+ 3 4    Authress              1e (lpstr)    Martha Maroney
+ 4 5    Keywords              1e (lpstr)    
+ 5 6    Comments              1e (lpstr)    
+ 6 7    Template              1e (lpstr)    online
+ 7 8    LastAuthress          1e (lpstr)    jonettat
+ 8 9    Revision              1e (lpstr)    24
+ 9 a    EditTime              40 (filetime) 15:49:00
+ a b    LastPrinted           40 (filetime) 16.09.1995, 01:10:00
+ b c    Created               40 (filetime) 31.08.1995, 01:35:00
+ c d    LastSaved             40 (filetime) 13.11.1995, 23:19:00
+ d e    Pages                  3 (i4)       16
+ e f    Words                  3 (i4)       5273
+ f 10   Chars                  3 (i4)       30059
+10 12   Application           1e (lpstr)    Microsoft Word for Windows 95
+11 13   Security               3 (i4)       0
+----------------------------------------------------------------------
+--- PSet "CompObj" ---------------------------------------------------
+ n id   id_name               vartype       contents
+ 1 0    doc_long              1e (lpstr)    Microsoft Word Document
+ 2 1    doc_class             1e (lpstr)    MSWordDoc
+ 3 2    doc_spec              1e (lpstr)    Word.Document.6
+----------------------------------------------------------------------
+# Microsoft Word Document (Word.Document.6, 13.11.1995, 23:19:25, rev 24)
+  Title: Wrapping Legacy Code With Visual Basic Objects
+  Authress: Martha Maroney (former: jonettat)
+  Organization: Microsoft Corporation
+  Application: Microsoft Word for Windows 95
+  Template: online
+  Created: 31.08.1995, 01:35:00
+  Last saved: 13.11.1995, 23:19:00
+--- PSet "CompObj" ---------------------------------------------------
+ n id   id_name               vartype       contents
+ 1 0    doc_long              1e (lpstr)    Microsoft PowerPoint Slide
+ 2 1    doc_class             1e (lpstr)    PowerPoint.Slide.4
+ 3 2    doc_spec              1e (lpstr)    PowerPoint.Slide.7
+----------------------------------------------------------------------
+        # Microsoft PowerPoint Slide (PowerPoint.Slide.7, 28.09.1995, 20:06:30)
+--- PSet "CompObj" ---------------------------------------------------
+ n id   id_name               vartype       contents
+ 1 0    doc_long              1e (lpstr)    MS PowerPoint 4.0 Slide
+ 2 1    doc_class             1e (lpstr)    PowerPoint.Slide.4
+ 3 2    doc_spec              1e (lpstr)    PowerPoint.Slide.4
+----------------------------------------------------------------------
+        # MS PowerPoint 4.0 Slide (PowerPoint.Slide.4, 28.09.1995, 20:06:29)
+--- PSet "CompObj" ---------------------------------------------------
+ n id   id_name               vartype       contents
+ 1 0    doc_long              1e (lpstr)    MS PowerPoint 4.0 Slide
+ 2 1    doc_class             1e (lpstr)    PowerPoint.Slide.4
+ 3 2    doc_spec              1e (lpstr)    PowerPoint.Slide.4
+----------------------------------------------------------------------
+        # MS PowerPoint 4.0 Slide (PowerPoint.Slide.4, 28.09.1995, 20:06:29)
+--- PSet "CompObj" ---------------------------------------------------
+ n id   id_name               vartype       contents
+ 1 0    doc_long              1e (lpstr)    MS PowerPoint 4.0 Slide
+ 2 1    doc_class             1e (lpstr)    PowerPoint.Slide.4
+ 3 2    doc_spec              1e (lpstr)    PowerPoint.Slide.4
+----------------------------------------------------------------------
+        # MS PowerPoint 4.0 Slide (PowerPoint.Slide.4, 28.09.1995, 20:06:28)
+
+</pre>
+kir:> <p>
+<p>
+Back to <a href="index.html">Laola</a> Homepage.
+<p></body></html>
+

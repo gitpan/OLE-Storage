@@ -1,0 +1,355 @@
+#!/usr/bin/perl
+#$Id: lhalw,v 0.3.8.1 1997/10/25 01:15:07 schwartz Exp $
+#
+# lhalw, Have A Look at Word 6+ Files
+#
+# This program saves the text part of a Word 6/7 style or the first text
+# chunk of a word 8 file. The result for Word 8 files saved with "fastsave" 
+# will *not* always be the real contents of the document.
+#
+# -  The purpose of lhalw is mainly to demonstrate OLE::Storage, not so
+#    much to convert a word file. Anyway at least it handles the text portions
+#    of Word 6 / 7 files quite correctly. If you need a real convertress, 
+#    look for my program "Elser". You might like to use lhalw anyway, as 
+#    "real" of course is a euphemism for "big and slow" ;)
+#
+# -  lhalw informs you a little bit about the trouble while converting.
+#
+# See also usage() of this file. General information at:
+#    http://wwwwbs.cs.tu-berlin.de/~schwartz/pmh/index.html
+#
+# Copyright (C) 1996, 1997 Martin Schwartz 
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, you should find it at:
+#
+#    http://wwwwbs.cs.tu-berlin.de/~schwartz/pmh/COPYING
+#
+# You can contact me via schwartz@cs.tu-berlin.de
+#
+
+# Please change / uncomment (remove '#') setting according to your system.
+# $sys_os = "unix"; 
+# $sys_os = "dos";  
+
+sub error {
+   defined $Error ? $Error->string(@_) : 0;
+}
+
+use Getopt::Std;
+use OLE::Storage::Std;
+
+main: {
+   $|=1; $[=0;
+   getopts ('c:CfFNS');
+   usage() if !@ARGV && !$opt_f;
+
+   require OLE::Storage;
+   require OLE::Storage::Textutil;
+
+   $Error = OLE::Storage->NewError();
+   $Var   = OLE::Storage->NewVar();
+   $Text  = OLE::Storage::Textutil->new($Error);
+   $Doc   = undef;
+
+   $opt_f ? &handle_stream : &handle_files;
+   exit 0;
+}
+
+sub handle_stream {
+   if (-t STDIN) {
+      error("Nothing to do!"); err2(); return;
+   }
+   undef $/;
+   err2 ($Doc=OLE::Storage->open($Error, $Var, "input", 2**4, \<>)) 
+      && main_work()
+   ;
+}
+
+sub handle_files {
+   foreach $infile (@ARGV) {
+      msg ("Processing \"$infile\":");
+      next if !(err2 ($Doc=OLE::Storage->open($Error, $Var, $infile)) 
+         && main_work())
+      ;
+      msg3("done.");
+   }
+}
+
+sub main_work {
+   $header="";
+   $text_warn=undef; $text_body=undef; $text_foot=undef; 
+   $word_textl=0; $word_footl=0; $word_destl=0;
+
+   my $wpps;
+   is_opened: {
+      last if !get_worddocument_pps(\$wpps);
+      last if !$Doc->read($wpps, \$header, 0, 0x300);
+      last if !get_document_text($wpps);
+      last if !convert_text();
+      last if !save_document($infile);
+      return $Doc->close();
+   }
+
+   err2();
+   $Doc->close();
+   0;
+}
+
+sub usage {
+   print 
+      "usage: lhalw {document}\n"
+      ."Convert a Word 6+ Document simply to text.\n"
+      ."-c n  column. Output will have a width of maximal n characters.\n"
+      ."-C    Control chars. Keep Word's control characters.\n"
+      ."-f    filter. Reads a document from stdin, writes it to stdout.\n"
+      ."-F    Filter out. Writes document(s) to stdout.\n"
+      ."-N    No warnings.\n"
+      ."-S    Stupid. Do not evaluate fastsave information.\n"
+   ;
+   exit 0;
+}
+
+sub get_worddocument_pps {
+#
+# Assume Word Document, if there is a stream "WordDocument".
+#
+   my $ppsR = shift;
+   my %dir = ();
+   $Doc->directory(0, \%dir, "string");
+   $$ppsR = $dir{"WordDocument"};
+   return error ("Not a Word document!") if !$$ppsR;
+1}
+
+sub get_document_text {
+#
+# Read text section out of $inbuf and store this in global $text_body
+#
+   my $pps = shift;
+
+   # Document status
+   my $status1 = get_byte(\$header, 0x05);
+   my $status2 = get_word(\$header, 0x0a);
+
+   my $word_version_ok=1 if ($status1==0xc0) || ($status1==0xe0);
+   my $word_fast    = $status2 & 2**2;
+   my $word_crypted = $status2 & 2**8;
+   my $word_unicode = $status2 & 2**9;
+
+   return error("Document is password protected!") if $word_crypted;
+
+   if ($word_version_ok) {
+      ($word_textl, $word_footl, $word_destl) = get_nlong(3, \$header, 0x34);
+      $word_textl *= 2 if $word_unicode;
+      $word_footl *= 2 if $word_unicode;
+      $word_destl *= 2 if $word_unicode;
+      if ($word_fast && !$opt_S) {
+         return 0 if !get_fastsaved_text($pps, \$text_body);
+      } else {
+         return 0 if !get_text($pps, \$text_body);
+      }
+   } else {
+      $word_textl = get_long(\$header, 0x4c); 
+      $word_textl *= 2 if $word_unicode;
+      return 0 if !get_text($pps, \$text_body);
+   }
+
+   # Give a little warning, even if it's not very sensible.
+   my ($l, $lstr, $qstr);
+   $l = $word_textl+$word_footl+$word_destl-length($text_body);
+   if ($word_textl+$word_footl < length($text_body)) {
+      substr($text_body, $word_textl+$word_footl)="";
+   }
+   if (!$opt_N && $l) {
+      $lstr = abs($l)." byte" . (abs($l)>1 && "s" || "");
+      $qstr = ($l>0) ? "missing" : "to much";
+      $text_warn = "!! Attention: $lstr of text $qstr !!\n";
+      msg1("$lstr $qstr");
+   }
+1}
+
+sub get_text {
+   my ($pps, $bufR) = @_;
+   my ($begin, $end) = get_nlong(2, \$header, 0x18);
+   $Doc->read($pps, $bufR, $begin, $end-$begin);
+}
+
+sub get_fastsaved_text {
+#
+# This code handles as little as possible Word's fastsave format. 
+#
+   my ($pps, $bufR) = @_;
+
+   my ($buf, $tmp, $status);
+   my @fchar_to = ();
+   my @fchar_o = ();
+   my ($t, $o, $l, $max);
+
+   return 0 if !$Doc->read($pps, \$tmp);
+   $buf=substr($tmp, get_nlong(2, \$header, 0x160));
+
+   $o=0; 
+   while ($o<=length($buf)) {
+      $t=get_byte(\$buf, \$o);
+      $l=get_word(\$buf, \$o); next if !$l;
+      if (!$t) {
+         $o++; next;
+      } elsif ($t==1) {
+      } elsif ($t==2) {
+         $max = ($l-4)/12+1; $o+=2;
+         @fchar_to = get_nlong($max, \$buf, $o);
+         @fchar_o  = map (get_long(\$buf, $o+$max*4 +$_*8 +2), (0..$max-1));
+         last;
+      } else {
+         return error ("I don't understand this fastsave format!");
+      }
+      $o+=$l;
+   }
+   for (0..$#fchar_o) {
+      $$bufR .= substr($tmp, $fchar_o[$_], $fchar_to[$_+1]-$fchar_to[$_]);
+   }
+1}
+
+sub convert_text {
+   $text_foot = substr($text_body, $word_textl, $word_footl);
+   if ($word_textl < length($text_body)) {
+      substr($text_body, $word_textl)="";
+   }
+   local($num);
+
+   if (!$opt_C) {
+      silly_convert();
+      strip_control(\$text_body);
+      strip_control(\$text_foot);
+   }
+
+   if ($opt_c) {
+      $Text->width($opt_c);
+      $Text->mode(1); 
+      $Text->hyphen("-");
+      $Text->pardel($opt_C? "\x0d" : "\n");
+      $Text->tabdel("\t");
+
+      # Line breaking
+      return 0 if ! (
+         $Text->wrap(\$text_body) 
+         && $Text->wrap(\$text_foot)
+      );
+   }
+1}
+
+sub silly_convert {
+   # footnotes
+   $num=1; while ($text_body =~ s/\x02/[$num]/) { $num++ }
+   $num=1; while ($text_foot =~ s/\x02/[$num]/) { $num++ }
+   # fields
+   $text_body =~ s/\x13[^\x14]*\x14([^\x15]*)\x15/$1/g;
+   $text_body =~ s/\x13[^\x15]*\x15//g;
+   $text_foot =~ s/\x13[^\x14]*\x14([^\x15]*)\x15/$1/g;
+   $text_foot =~ s/\x13[^\x15]*\x15//g;
+}
+
+sub strip_control {
+   # Here some characters could be converted like:
+   my $bufR = shift;
+   $$bufR =~ s/[\x08\x09]/\t/g;		
+   $$bufR =~ s/(\x07\x07)/$1\x0d/g;		
+   $$bufR =~ s/\x07/ /g;
+   $$bufR =~ s/[\xa0]/ /g;		
+   $$bufR =~ s/[\x0b\x0c\x0e]/\x0d/g;		
+   $$bufR =~ tr/\x1e\x84\x91\x92\x93\x94/-"`'""/;
+
+   # Away with Words control characters 
+   $$bufR =~ s/[\x00-\x06\x0f-\x1f\x80-\x9f]//g;
+
+   $$bufR =~ s/\x0d/\n/g;
+}
+
+sub save_document {
+   my $outname;
+   if ($opt_f || $opt_F) {
+      print $text_warn if ($text_warn && !$opt_N);
+      print $text_body.$text_foot;
+   } else {
+      $outname = basename(shift) . '.txt';
+      return error("Cannot open $outname!") if !(
+         open(OUT, ">".$outname) && binmode(OUT)
+      );
+      print OUT $text_warn if ($text_warn && !$opt_N);
+      print OUT $text_body.$text_foot;
+      close OUT;
+   }
+   1;
+}
+
+##
+## Little helps
+##
+
+sub msg  { !$opt_F && @_ && print (shift) || 1 }
+sub msg1 { msg( " ".(shift)."," ) }
+sub err2 {
+   msg2(shift && "ok" || error());
+}
+sub msg2 {
+   my $status = shift;
+   if ($status eq "ok") {
+      return msg(shift);
+   } else {
+      msg3("error!");
+      print "Error: $status\n" if $status;
+      return 0;
+   }
+}
+sub msg3 {
+   my $msg = shift;
+   $msg .= "\n" if ! ($msg=~/\n$/);
+   msg ( " $msg" );
+}
+
+__END__
+
+=head1 NAME
+
+lhalw - Have A Look at Word 6+ Files
+
+=head1 SYNOPSIS
+
+usage: lhalw [options] {document}
+
+ -c n  column. Output will have a width of maximal n characters.
+ -C    Control chars. Keep Word's control characters.
+ -f    filter. Reads a document from stdin, writes it to stdout.
+ -F    Filter out. Writes document(s) to stdout.
+ -N    No warnings.
+ -S    Stupid. Do not evaluate fastsave information.
+
+=head1 DESCRIPTION
+
+Converts a Word 6+ Document simply to text. 
+
+Understands fastsaved files for Word 6 and Word 7, gets some text out
+of Word 8 documents.
+
+Option C<-N> probably is preferable to use.
+
+=head1 SEE ALSO
+
+L<OLE::Storage>
+
+=head1 AUTHOR
+
+Martin Schwartz E<lt>F<schwartz@cs.tu-berlin.de>E<gt>. 
+
+=cut
+

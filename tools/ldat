@@ -1,0 +1,488 @@
+#!/usr/bin/perl
+#$Id: ldat,v 0.3.8.2 1997/10/27 23:19:27 schwartz Exp $
+#
+# ldat, Display Authress Title
+#
+# This program demonstrates how to evaluate property sets. 
+#
+# See also usage() of this file. General information at:
+#    http://wwwwbs.cs.tu-berlin.de/~schwartz/pmh/index.html
+#
+# Copyright (C) 1996, 1997 Martin Schwartz 
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, you should find it at:
+#
+#    http://wwwwbs.cs.tu-berlin.de/~schwartz/pmh/COPYING
+#
+# You can contact me via schwartz@cs.tu-berlin.de
+#
+
+use Getopt::Std;      # imports: getopts
+use OLE::Storage::Std;  # imports: get_long, get_word ...
+
+main: {
+   $|=1; $[=0;
+   getopts ('adhnS');
+   usage() if !@ARGV || $opt_h;
+
+   require OLE::Storage; 
+   require OLE::PropertySet;
+
+   $Error = OLE::Storage->NewError(); 	# Error Object
+   $Var   = OLE::Storage->NewVar();	# Var Object
+   $Doc   = undef;			# Document Object
+
+   foreach $file (@ARGV) {
+      #
+      # Open the Document
+      #
+      print "Processing \"$file\":\n";
+      $Doc = OLE::Storage->open($Error, $Var, $file);
+      if (!$Doc) {
+         error(); next;
+      }
+      print "\n";
+
+      #
+      # Start examination at Root Property Set (pps handle is always 0) 
+      # with indent level 0 (indent level is just a variable, that enables 
+      # some more proper output formatting).
+      #
+      do_directory(0,0);
+
+      #
+      # Close the Document
+      #
+      $Doc->close();
+      print "\n";
+   }
+
+   exit 0;
+}
+
+##
+## main things
+##
+
+sub usage {
+   print "usage: ldat [-a] [-d] {document}\n".
+     "Shows some information about the objects stored in Ole/Com documents.\n".
+     "-a    All, show even \"empty\" objects\n".
+     "-d    Debug, some more debug information about special properties\n".
+     "-n    No apps, do not look at special application data\n".
+     "-h    Help, shows this help\n";
+     "-S    (Slow. For debugging purposes)\n";
+   exit 0;
+}
+
+sub do_directory {
+   # !recursive!
+   #
+   # void = do_directory (directory pps, indent level);
+   #
+   local($directory_pps, $level)=@_;
+   local($indent) = "    " x $level;
+   local($pps); 
+   my @list;
+
+   #
+   # Read current directory into hash %dir, apply method "string" on
+   # properties.
+   #
+   my %dir = ();
+   return if !$Doc->directory($directory_pps, \%dir, "string");
+
+   #
+   # --- Read standard properties ------------------------------------------
+   # 
+   # This shows how to ask for properties. You don't have to be concerned
+   # about, if they actually are available. If a property is not available,
+   # result of method string() is "". You have to have knowledge about the
+   # property ids, e.g. by trying out "ldat -d LEGACY1.doc". You will see
+   # then, that e.g. id 2 of property set "\05SummaryInformation" stands for 
+   # the title property. 
+   #
+
+   #
+   # (Fake) PropertySet \01CompObj
+   # 
+   # Example with tie. Apply method string() on returned properties 
+   # automatically.
+   #
+   @list=(); if ($pps = $dir{"\01CompObj"}) {
+      if (tie my %P, OLE::PropertySet, $Error, $Var, $pps, $Doc, "string") {
+         @list = ($P{0}, $P{2})
+   }}
+   local($type1, $type2) = @list;
+
+   #
+   # PropertySet \05DocumentSummaryInformation
+   #
+   # Example with tie. Apply method string() by hand.
+   #
+   @list=(); if ($pps = $dir{"\05DocumentSummaryInformation"}) {
+      if (tie my %P, OLE::PropertySet, $Error, $Var, $pps, $Doc) {
+         @list = string {$P{15}};
+   }}
+   local ( $org ) = @list;
+
+   #
+   # PropertySet \05SummaryInformation
+   #
+   # Example without tie. (don't rely on line number of debug information!)
+   #
+   @list=(); if ($pps = $dir{"\05SummaryInformation"}) {
+      if (my $P = load OLE::PropertySet ($Error, $Var, $pps, $Doc)) {
+         @list = string {$P->property(2,4,7,8,9,18,12,13)};
+   }}
+   local ($title, $authress, $template, $lastauth, $revnum, $appname, 
+      $created, $lastsvd
+   ) = @list;
+
+
+   # --- Word, Excel printer info ------------------------------------------
+   if (!$opt_n) {
+      local ( @printer);
+      read_wordinfo()          if $pps = $dir{"WordDocument"};
+      if ($opt_S) {
+         read_excelinfo_slow() if $pps = $dir{"Book"};
+      } else {
+         read_excelinfo()      if $pps = $dir{"Book"};
+      }
+   }
+
+   # --- "Debug". Shows how to read all properties -------------------------
+   if ($opt_d) {
+      foreach $pps (values %dir) {
+         debug_property($pps);
+      }
+   }
+
+   # --- Print information about current object ----------------------------
+   show: {
+      if (!$opt_a) {
+         last if !$type1 && !($title || $authress || $appname);
+      }
+      &print_compobj();
+      &print_suminfo();
+      &print_printerinfo();
+   }
+
+   #
+   # --- Recurse -----------------------------------------------------------
+   #
+   # Look for directories in current directory (that means, look for
+   # embedded objects). If available, recurse into them. The indenting 
+   # level of the output is growing in that case.
+   #
+   foreach $pps (values %dir) {
+      do_directory($pps, $level+1) if $Doc->is_directory($pps);
+   }
+}
+
+##
+## -------------------------- Output ---------------------------------------
+## 
+
+sub print_compobj {
+   my $out;
+   $out  = "$indent# $type1 ($type2, " if $type1;
+   $out .= "$indent# (unknown, "       if !$type1;
+   $out .= string {$Doc->date($directory_pps)};
+   $out .= ", rev $revnum" if $revnum;
+   $out .= ")";
+   print "$out\n";
+}
+
+sub print_suminfo {
+   my $out;
+   $out = "$indent  Title: $title\n" if $title;
+   if ($authress || $lastauth) {
+      $out .= "$indent  Authress: $authress";
+      $out .= " (former: $lastauth)" if $lastauth && $lastauth ne $authress;
+      $out .= "\n";
+   }
+   $out .= "$indent  Organization: $org\n"    if $org;
+   $out .= "$indent  Application: $appname\n" if $appname;
+   $out .= "$indent  Template: $template\n"   if $template;
+   $out .= "$indent  Created: $created\n"     if $created;
+   $out .= "$indent  Last saved: $lastsvd\n"  
+      if $lastsvd && ($lastsvd ne $created)
+   ;
+   print $out;
+}
+
+sub print_printerinfo {
+   return if !@printer;
+   print "$indent  Printer: $printer[0]";
+   print " ($printer[2])" if $printer[2];
+   print "\n";
+}
+
+##
+## --------------------------- Special Data --------------------------------
+##
+## Get information out of application data. This requires special knowledge 
+## about the application considered. It actually has nothing to do with OLE 
+## or OLE::Storage. It might look a little bit strange.
+##
+
+sub read_wordinfo {
+#
+# Word (MSWordDoc) style, read some printer info
+#
+# Word defines a lot of information in its header block. At 0x130
+# is a long offset and a long size of a printer info chunk.
+#
+   my ($pairbuf, $infobuf, $o, $l);
+
+   return if !$Doc->read($pps, \$pairbuf, 0x130, 8);
+   return if !($o = get_long(\$pairbuf, 0x00));
+   return if !($l = get_long(\$pairbuf, 0x04));
+   return if !$Doc->read($pps, \$infobuf, $o, $l);
+   @printer = ($infobuf =~ /^([^\00]*)\00([^\00]*)\00([^\00]*)/ );
+}
+
+sub read_excelinfo {
+#
+# Excel (Biff5) style, read some printer info 
+#
+# Biff is build as a long chain of data chunks. To find a chunk one has to 
+# go hand over hand through the file. Printer info chunks have the type 0x4d. 
+#
+   @printer = ();
+   my ($buf, $fsize, $infobuf, $l, $o, $type);
+
+   return if !$Doc->read($pps, \$buf);
+   $fsize=length($buf);
+
+   $o = 0;
+   while ($o<$fsize) {
+      $type = get_word(\$buf, $o);
+      $l = get_word(\$buf, $o+2);
+      if ($type == 0x4d) {
+         $infobuf = substr($buf, $o+4, $l);
+         last;
+      }
+      $o += (4+$l);
+   }
+   @printer = ($infobuf =~ /^..([^\00]*)\00/ );
+}
+
+sub read_excelinfo_slow {
+#
+# Excel (Biff5) style, read some printer info. 
+#
+# This is alternative to read_excelinfo(). It reads not the whole file at 
+# once, but does many little read calls. You can use it to see, how fast
+# or slow io practically is. In fact you will notice, that many io calls 
+# are slower than one io call (hard to believe, isn't it ?-)
+# 
+   @printer = ();
+   my ($buf, $infobuf, $fsize, $l, $o, $type);
+
+   $o = 0;
+   $fsize = $Doc->size($pps);
+   while ($o<$fsize) {
+      $Doc->read($pps, \$buf, $o, 4);
+      $type = get_word(\$buf, 0);
+      $l = get_word(\$buf, 2);
+      if ($type == 0x4d) {
+         $Doc->read($pps, \$infobuf, $o+4, $l);
+         last;
+      }
+      $o += (4+$l);
+   }
+   @printer = ($infobuf =~ /^..([^\00]*)\00/ );
+}
+
+
+##
+## ------------------------ Read all properties ----------------------------
+##
+
+sub debug_property {
+#
+# void debug_property($pps)
+#
+   my $pps = shift;
+   return 0 if !type OLE::PropertySet($Doc, $pps);
+   my ($PSet, %PSet);
+   my $i=0;
+
+   debug_head($Doc->name($pps)->string());
+
+   # Tie the property set to %PSet:
+   if ($PSet = tie %PSet, OLE::PropertySet, $Error, $Var, $pps, $Doc) {
+
+      # Loop over all properties:
+      for (sort {$a <=> $b} keys %PSet) {
+
+         # debug_body(Prop, Prop_Id, Prop_Idstr, ...):
+         debug_body($PSet{$_}, $_, $PSet->idstr($_), ++$i);
+      }
+   } else {
+      error();
+   }
+
+   debug_tail();
+}
+
+sub debug_head {
+   my $name = shift;
+   $name =~ s/[^a-zA-Z0-9_]//g;
+   print fill("--- PSet \"$name\" ", 70, "-");
+   print " n id   id_name               vartype       contents\n";
+}
+
+sub debug_tail {
+   print fill("", 70, "-");
+}
+
+sub debug_body {
+#
+# void debug_body ($Prop, $token, $token_str, $index, $ii)
+#
+# ii  0: print a line with current $index and $token
+#    !0: print a line with current $token.$ii
+#
+# debug_body has to handle three situations:
+#
+# 1. A property can be of type "variant". In this case the properties data 
+#    is an own property. To handle this, "Property" module applies method 
+#    string() on the data property. Methods type and typestr can get a 
+#    parameter, that will make them to return the data property's type.
+#
+# 2. A property can be an array. In this case the properties data is
+#    an anonymous array of properties. You can get it with the method
+#    arrays().
+#
+# 3. A property is quite "normal", that means it is a non variant scalar.
+#
+   my ($P, $token, $token_str, $i, $ii) = @_;
+   my (@out);
+   my $j = 0;
+
+   if (!$ii) {
+      @out = (
+         sprintf("%2x %x", $i, $token),	8, " ",
+         sprintf("%s", $token_str),	28, " "
+      );
+   } else {
+      @out = (
+         sprintf("   %x.%02x ", $token, $ii), 28, " "
+      );
+   }
+
+   push (@out, (
+      sprintf("%4x (%s) ", $P->type, $P->typestr||"unknown"), 44, " "
+   ));
+
+   # Property contents
+   if (is_scalar $P) {
+      print fill(@out, $P->string);
+   } elsif (is_array $P) {
+      print fill(@out);
+      foreach (@{array $P}) {
+         debug_body($_, $token, 0, $i, ++$j);
+      }
+   } 
+1}
+
+#
+# ------------------------------ Utils -------------------------------------
+#
+
+sub error {
+   printf "Error! %s\n\n", $Error->string();
+}
+
+sub _error { 
+   $Error->error(@_) if defined $Error;
+}
+
+sub fill {
+#
+# void == fill ($str, $pos, $fillchar, ...)
+# 
+# Fills string $str upto position $pos with char $fillchar. When given more 
+# than one variable set, substrings are concatenated; $pos still referes to
+# the total length of the string then. Appends a "\n";
+#
+   my ($str, $pos, $char);
+   my $out = "";
+   while (@_) {
+      ($str, $pos, $char) = (shift, shift, shift);
+      $out .= $str;
+      $out .= $char x ($pos - length($out));
+   }
+   "$out\n";
+}
+
+__END__
+
+=head1 NAME
+
+ldat - Display Authress Title
+
+=head1 SYNOPSIS
+
+ldat [C<-a>] [C<-d>] [C<-n>] document
+
+=head1 DESCRIPTION
+
+Shows some information about the Property Sets stored in MS Windows
+Structured Storage documents.
+
+Options are:
+
+=over 4
+
+=item C<-a> all
+
+This shows also those objects, that consist only out of directories and
+contain no stream data.
+
+=item C<-d> debug
+
+This shows additionally a list of all property set entries. It is e.g.
+useful, if you want to see, which type some property has.
+
+=item C<-h> help
+
+Shows a little help text.
+
+=item C<-n> no apps
+
+Do not look at special application data. Useful, if you want to have a quick
+glance, but have big document files.
+
+=item C<-S> Slow.
+
+No functional use. Just for debugging purposes.
+
+=back
+
+Demonstration program for OLE::Storage
+
+=head1 SEE ALSO
+
+L<OLE::Storage>
+
+=head1 AUTHOR
+
+Martin Schwartz E<lt>F<schwartz@cs.tu-berlin.de>E<gt>. 
+
+=cut
+
