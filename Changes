@@ -1,8 +1,12 @@
 
 Changes of Laola distribution:
 
+OLE-Storage-0.384 (?)
+   +  new method at OLE::Storage: clsid
+   +  Improved Herbert's color support.
+
 OLE-Storage-0.383 (3.3.98)
-   +  xls2html is new. It converts Excel-Spreadsheets to some kind of HTML. 
+   +  Herbert is new. It converts Excel-Spreadsheets to some kind of HTML. 
 
 OLE-Storage-0.382 (12.2.98)
    *  ldat, lhalw and lls got long options and use Startup.pm 

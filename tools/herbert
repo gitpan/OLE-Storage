@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#$Id: herbert,v 1.19 1998/03/03 08:15:00 schwartz Exp $
+#$Id: herbert,v 1.31 1998/03/10 08:59:11 schwartz Exp $
 #
 # Herbert - Converts a simple Excel document to some kind of HTML.
 #
@@ -30,8 +30,8 @@
 #
 
 my $PROGNAME = "Herbert";
-my $VERSION=do{my@R=('$Revision: 1.19 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
-my $DATE = ('$Date: 1998/03/03 08:15:00 $' =~ / ([^ ]*) /) && $1;
+my $VERSION=do{my@R=('$Revision: 1.31 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $DATE = ('$Date: 1998/03/10 08:59:11 $' =~ / ([^ ]*) /) && $1;
 
 no strict; $^W=0;
 use Getopt::Long;
@@ -44,7 +44,7 @@ my %opt = (
    "dirmode"    => "0700",
    "filemode"   => "0600",
    "colorframe" => "9999bf",
-   "colorsheet" => "cfcfcf",
+   "colorsheet" => "dfdfdf",
    "suffix"     => ".html",
 );
 
@@ -58,6 +58,7 @@ main: {
       "noframe",
       "nogrid",
       "noinfo",
+      "usefonts",
       "colorframe=s",
       "colorsheet=s",
       "nopack",
@@ -198,6 +199,7 @@ sub usage {
         "colorframe s  Outer frame will get color #s (".$opt{"colorframe"}.")",
         "colorsheet s  Worksheet will get color #s (".$opt{"colorsheet"}.")",
         "herbert       Very short info about Herbert Baum.",
+        "usefonts      Use the font faces defined in excel sheet",
 
         "log           Write a logfile.",
         "src_base   s  Regard this as start directory in relative mode.",
@@ -240,10 +242,10 @@ sub _print_usage {
 
 sub parse_sheet {
 #
-# Excel (Biff5) style, read some printer info 
+# Excel (Biff5) style
 #
 # Biff is build as a long chain of data chunks. To find a chunk one has to 
-# go hand over hand through the file. Printer info chunks have the type 0x4d. 
+# go hand over hand through the file.
 #
    $Sheet = herbert::new_document();
 
@@ -255,20 +257,170 @@ sub parse_sheet {
    my ($buf);
    return 0 unless $Doc->read($pps, \$buf);
 
-   my $allow_color = $opt{"nocolor"}&&255 | $opt{"nocellcolor"}&&1;
    my $debug_level = $opt{"xdebug"}&&1 || $opt{"xxdebug"}&&2;
-   return 0 unless $Sheet -> parse ($buf, $allow_color, $debug_level);
+   return 0 unless $Sheet -> parse ($buf, $debug_level);
 1}
 
 sub Sheet_to_HTML() {
    my ($orig_file) = @_;
+
+   my ($font_open, $font_close);
+
+   my @xf = ();
+
+   my %html_attrib = (
+      "b"      => ["<B>",      "</B>"],
+      "i"      => ["<I>",      "</I>"],
+      "strike" => ["<STRIKE>", "</STRIKE>"],
+      "sub"    => ["<SUB>",    "</SUB>"],
+      "sup"    => ["<SUP>",    "</SUP>"],
+      "u"      => ["<U>",      "</U>"]
+   );
+
+   my %html_h_align = (
+      "l"     => " ALIGN=LEFT",
+      "c"     => " ALIGN=CENTER",
+      "r"     => " ALIGN=RIGHT",
+   );
+
+   my %html_v_align = (
+      "t"     => " VALIGN=TOP",
+      "c"     => " VALIGN=CENTER",
+      "b"     => " VALIGN=BOTTOM",
+   );
+
+   ##
+   ## Converting style information to HTML
+   ##
+
+   { 
+      my $default_fg_color = $Sheet -> default_fg_color();
+
+      for (0..$#{$Sheet->xf}) {
+
+         my $XF = $Sheet -> xf -> [$_];
+         next unless defined $XF;
+
+         my ($font_no, $format_no, $bg_col_no, $halign, $valign) = 
+            $Sheet -> XF_all ($XF)
+         ;
+
+         my $td_open    = "";
+         my $font_open  = "";
+         my $open       = "";
+         my $font_close = "";
+         my $close      = "";
+         my $td_close   = "";
+
+         {
+            #
+            # font information 
+            #
+            my $Font = $Sheet -> font -> [$font_no];
+            last unless defined $Font;
+   
+            { # NAME
+               last unless $opt{"usefonts"};
+               my $name = $Font -> {"NAME"};
+               #last if $name =~ /^Times New Roman$/;
+               $font_open .= " FACE=\"$name\"";
+            }
+
+            { # font height 
+               my $height = $Font -> {"HEIGHT"};
+               my $size = undef;
+               if ($height <= 7) {
+                  $size = "-2";
+               } elsif ($height <= 10) {
+                  $size = "-1";
+               } elsif ($height <= 12) {
+                  # 3
+               } elsif ($height <= 18) {
+                  $size = "+1";
+               } elsif ($height <= 24) {
+                  $size = "+2";
+               } elsif ($height <= 32) {
+                  $size = "+3";
+               } else {
+                  $size = "+4";
+               }
+               $font_open .= " SIZE=$size" if defined $size;
+            }
+   
+            { # "ATTRIB"	=> "b i outline shadow strike sub sup u",
+               for (split /\s+/, $Font->{"ATTRIB"}) {
+                  if ($html_attrib{$_}) {
+                     $open  .= $html_attrib{$_}->[0];
+                     $close .= $html_attrib{$_}->[1];
+                  }
+               }
+            }
+
+            { # FG_COL_NO
+               unless ($opt{"nocellcolor"}||$opt{"nocolor"}) {
+                  my $color = $Font->{"FG_COL_NO"};
+                  last if $color==32767;
+                  $color-=8 if $color>=8;
+                  last if $color == $default_fg_color;  
+                  $font_open.=sprintf(" COLOR=#%06x", $Sheet->color->[$color]);
+               }
+            }
+
+            { # BG_COL_NO
+               unless ($opt{"nocellcolor"}||$opt{"nocolor"}) {
+                  last unless defined $bg_col_no;
+                  my $color = $bg_col_no;
+                  $color -= 8 if $bg_col_no >= 8;
+                  last if $color == 1; # assume color 1 to be default...
+                  my $color = $Sheet->color->[$color];
+                  last if !defined $color;
+                  $td_open.=sprintf(" BGCOLOR=#%06x", $color);
+               }
+            }
+
+            { # H_ALIGN
+               if ($halign) {
+                  if ($html_h_align{$halign}) {
+                     $td_open.=$html_h_align{$halign};
+                  }
+               }
+            }
+
+            { # V_ALIGN
+               if ($valign) {
+                  if ($html_v_align{$valign}) {
+                     $td_open.=$html_v_align{$valign};
+                  }
+               }
+            }
+
+         }
+
+         if ($font_open) {
+            $font_open  = "<FONT$font_open>";
+            $font_close = "</FONT>";
+         }
+
+         $xf[$_] = [
+            $td_open, $font_open, $open, $close, $font_close, $td_close
+         ];
+      }
+   }
+
+   ##
+   ## Creating table, using Cell text and HTML style information
+   ##
 
    $text = 
       "<HTML><HEAD>\n".
       "<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html\">\n".
       "<META NAME=\"GENERATOR\" CONTENT=\"$PROGNAME $VERSION ($DATE)\">\n"
    ;
-   $text .= "<TITLE>$orig_file</TITLE>\n" unless $opt{"noinfo"};
+   if (!$opt{"noinfo"}) {
+      $text .= "<TITLE>$orig_file</TITLE>\n";
+   } else {
+      $text .= "<TITLE>Excel Tabelle</TITLE>\n";
+   }
    $text .= "</HEAD><BODY>&nbsp;<P>\n\n";
 
    $text .= 
@@ -321,7 +473,8 @@ sub Sheet_to_HTML() {
       }
      
       $row = $row_c;
-      $text .= "<TR>\n"; my $cell; my $font;
+      $text .= "<TR VALIGN=BOTTOM ALIGN=LEFT>\n"; 
+      my $cell; my $font;
       $text .= "  <TD$colorframe><B>".($gridY++)."</B></TD>\n" 
          unless $opt{"noframe"}
       ;
@@ -329,25 +482,24 @@ sub Sheet_to_HTML() {
          $cell = $Sheet->Cell_Text($row_c, $_)||"&nbsp;";
          if ($cell =~ /^(-)?\d*\.\d*(e[-]?\d*)?$/) {
             $cell = sprintf(("%.".$precision."f"), $cell);
-            $align = " align=right";
+            $align = " ALIGN=RIGHT";
          } elsif ($cell =~ /^(-)?[\d ]*$/) {
-            $align = " align=right";
+            $align = " ALIGN=RIGHT";
          } else {
             $align = "";
          }
-         $font = $Sheet -> Cell_Font($row_c, $_);
-         $text .= "  <TD$align>";
-         $text .= "<".$font->[0].">" if $font->[0];
-         $text .= $font->[1]. $cell. $font->[2];
-         $text .= $font->[3] if $font->[0];
+
+         my $xf = $xf [$Sheet -> Cell_XF ($row_c, $_)];
+
+         $text .= "  <TD".$xf->[0].$align.">";
+         $text .= $xf->[1] if $xf->[1];
+         $text .= $xf->[2]. $cell. $xf->[3];
+         $text .= $xf->[4] if $xf->[4];
          $text .= "</TD>\n";
       }
       $text .= "</TR>\n";
    }
-   $text .= 
-      "</TABLE><p>\n".
-      "</BODY></HTML>"
-   ;
+   $text .= "</TABLE><p>\n</BODY></HTML>";
 1}
 
 
@@ -356,8 +508,14 @@ package herbert;
 ## 
 ## $Sheet = {
 ##    authress  => $str,
-##    format    => {
-##    },
+##    format    => [
+##       {
+##          "FONT_NO" => $index,
+##          "FORM_NO" => $index,
+##          "H_ALIGN" => "l"|"c"|"r"|"j";	# default: "l" == "left"
+##          "V_ALIGN" => "t"|c"|"b"|"j";	# default: "t" == "top"
+##       }
+##    ],
 ##    font      => {
 ##    },
 ##    precision =>
@@ -377,63 +535,520 @@ use OLE::Storage::Std;
 
 sub _member { my $S=shift; my $n=shift if @_; $S->{$n}=shift if @_; $S->{$n}}
 
-sub authress        { shift->_member("DOC_AUTHRESS", @_); }
-sub default_color   { shift->_member("DOC_DEFCOL", @_); }
-sub font            { shift->_member("DOC_FONT", @_); }
-sub format          { shift->_member("DOC_FORMAT", @_); }
-sub maxrow          { shift->_member("DOC_MAXROW", @_); }
-sub maxcol          { shift->_member("DOC_MAXCOL", @_); }
-sub precision       { shift->_member("DOC_PRECISION", @_); }
-sub sheet           { shift->_member("DOC_SHEET0", @_); }
-sub Table_Name      { shift->_member("DOC_TABLE0_NAME", @_); }
-sub _num_of_fonts   { shift->_member("DOC_FONT_NUM", @_); }
-sub _num_of_formats { shift->_member("DOC_FORMAT_NUM", @_); }
-sub _table          { shift->_member("DOC_TABLE", @_); }
-sub _num_of_tables  { shift->_member("DOC_TABLE_NUM", @_); }
-sub _color          { shift->_member("DOC_COLOR", @_); }
-
-sub load_colormap {
-   my ($S, $colorA) = @_;
-   $S->_color($colorA);
-   my $defcol = $S->default_color;
-   my ($tmp, $color, $font_open, $font_close);
-   # printf "Colormap\n";
-   for (0..$#{$S->font}) {
-      $color = $S->font->[$_]->[4];
-      next if $color==$defcol;
-
-      $font_open = $S->font->[$_]->[0];
-      if ($font_open) {
-         $font_open .= " ";
-      } else {
-         $font_open = "FONT ";
-      }
-      $font_open .= sprintf("COLOR=#%06x", $S->_color->[$color]);
-      $S->font->[$_]->[0] = $font_open;
-      $S->font->[$_]->[3] = "</FONT>";
-   }
-}
-
-# define default colors
-#
-# document methods 
-#
+sub authress         { shift->_member("DOC_AUTHRESS", @_); }
+sub default_fg_color { shift->_member("DOC_DEFCOL", @_); }
+sub maxrow           { shift->_member("DOC_MAXROW", @_); }
+sub maxcol           { shift->_member("DOC_MAXCOL", @_); }
+sub precision        { shift->_member("DOC_PRECISION", @_); }
+                     
+sub color            { shift->_member("DOC_COLOR", @_); }
+sub font             { shift->_member("DOC_FONT", @_); }
+sub format           { shift->_member("DOC_FORMAT", @_); }
+sub xf               { shift->_member("DOC_XF", @_); }
+sub num_of_fonts     { shift->_member("DOC_FONT_NUM", @_); }
+sub num_of_formats   { shift->_member("DOC_FORMAT_NUM", @_); }
+sub num_of_xfs       { shift->_member("DOC_XF_NUM", @_); }
+                     
+sub sheet            { shift->_member("DOC_SHEET0", @_); }
+sub Table_Name       { shift->_member("DOC_TABLE0_NAME", @_); }
+sub _table           { shift->_member("DOC_TABLE", @_); }
+sub _num_of_tables   { shift->_member("DOC_TABLE_NUM", @_); }
 
 sub new_document {
    my @colors = (
       "#000000", # 00 default, black
    );
    my $S = bless ({}, "herbert");
-   $S -> _num_of_fonts (-1);
-   $S -> _num_of_formats (-1);
+   $S -> num_of_fonts (-1);
+   $S -> num_of_xfs (-1);
    $S -> sheet  ({});
    $S -> font   ([]);
    $S -> format ([]);
+   $S -> xf     ([]);
    $S -> _table ([]);
-   $S -> _color (\@colors);
+   $S -> color (\@colors);
    $S -> maxrow (1);
    $S -> maxcol (1);
    $S;
+}
+ 
+##
+## Colormap
+##
+## Just a table of colors
+##
+
+sub load_colormap {
+   my ($S, $colorA) = @_;
+   my @map = map {($_&0xff)<<16 | ($_&0xff00) | ($_&0xff0000)>>16} @$colorA;
+   $S->color(\@map);
+   #$S->dump_colormap();
+}
+
+sub dump_colormap {
+   my ($S) = @_;
+   for (0..$#{$S->color}) {
+      printf("  Color %02x: #%06x\n", $_, $S->color->[$_]);
+   }
+   $S->color();
+}
+
+##
+## FORMAT = {
+##    STR = $string,
+## }
+##
+
+sub add_format {
+   my ($S, $idx, $str) = @_;
+   my $num = $S->num_of_formats ($S->num_of_formats +1);
+   $S -> format -> [$idx] -> {"STR"} = $str;
+   #$S -> dump_format ($idx);
+}
+
+sub dump_format {
+   my ($S, $num) = @_;
+   printf ("Format number %02x\n", $num);
+   if (defined $S->format->[$num]) {
+      printf ("   STR = '%s'\n", $S->format->[$num]->{STR});
+   } else {
+      print "   Not defined!\n";
+   }
+   print "\n";
+   $S -> format -> [$num];
+}
+
+##
+## XF = {
+##    BG_COL_NO => $color_index
+##    H_ALIGN	=> "l"||"c"||"r"||"j",
+##    V_ALIGN   => "t"|"c"|"b"|"j",
+##    FONT_NO	=> $font_index,
+##    FORM_NO	=> $form_index,
+## }
+##
+
+sub add_xf {
+#
+# $S,
+# 0 font#, 1 format#, 2 unkown, 3 align, 4 bgcolor, 5, 6, 7 unknown
+#
+   my $S = shift;
+   my $num = $S->num_of_xfs ($S->num_of_xfs +1);
+
+   my $halign = "";
+   {
+      my $num = $_[3] & 7;
+      if      ($num == 0) { # default, here set to "l"
+         # $halign = "l"
+      } elsif ($num == 1) { # left, set to default
+         # $halign = "l";
+      } elsif ($num == 2) { # center
+         $halign = "c";
+      } elsif ($num == 3) { # right
+         $halign = "r";
+      } elsif ($num == 4) { # fill
+      } elsif ($num == 5) { # justify
+         $halign = "j";
+      } elsif ($num == 6) { # center
+      } else {
+         $halign = "";
+     }
+   }
+
+   my $valign = "";
+   {
+      my $num = ($_[3]>>4) & 7;
+      if      ($num == 0) {	# top
+         $valign = "t";
+      } elsif ($num == 1) {	# center
+         $valign = "c";
+      } elsif ($num == 2) {	# default: bottom
+         # $valign = "b";
+      } elsif ($num == 3) {	# justify
+         $valign = "j";
+      } 
+   }
+
+   $S -> xf -> [$num] = {
+      "BG_COL_NO" => $_[4]&0x7f,
+      "FONT_NO"   => $_[0],
+      "FORM_NO"   => $_[1],
+      "H_ALIGN"   => $halign,
+      "V_ALIGN"   => $valign,
+   };
+   #$S->dump_xf($num);
+}
+
+sub dump_xf {
+   my ($S, $num) = @_;
+   printf ("XF number %02x:\n", $num);
+   if (defined $S->xf->[$num]) {
+      printf ("   Background color index: %02x\n", 
+         $S->xf->[$num]->{"BG_COL_NO"}
+      );
+      printf ("   Font number:            %02x\n", 
+         $S->xf->[$num]->{"FONT_NO"}      
+      );                                  
+      printf ("   Format number:          %02x\n", 
+         $S->xf->[$num]->{"FORM_NO"}      
+      );                                  
+      printf ("   Horizontal alignment:   '%s'\n", 
+         $S->xf->[$num]->{"H_ALIGN"}
+      );
+      printf ("   Vertical alignment:     '%s'\n", 
+         $S->xf->[$num]->{"V_ALIGN"}
+      );
+   } else {
+      printf ("   Not defined!\n");
+   }
+   print "\n";
+   $S->xf->[$num];
+}
+
+##
+## Font = {
+##   "ATTRIB"    => "b i outline shadow strike sub sup u",
+##   "FG_COL_NO" => $index,
+##   "HEIGHT"    => $size,
+##   "NAME"      => $fontname,
+## }
+##
+
+sub add_font {
+#
+# $S, 
+# 0 $height, 1 $attrib, 2 $color, 3 $bold, 4 $super, 5 $underline, 6 $family, 
+# 7 $charset, 8 $unknown, 9 $name
+#
+   my $S = shift;
+   my $num = $S->num_of_fonts;
+   $num++; $num++ if $num==4;
+   $S->num_of_fonts($num);
+
+   my %font = ();
+
+   { # height
+      $font{"HEIGHT"} = $_[0] / 20;
+   }
+
+   my $attrib = "";
+   { # attrib
+      $attrib .= "i "       if $_[1] & 2**1;	# italic
+      $attrib .= "strike "  if $_[1] & 2**3;	# strike through
+      $attrib .= "outline " if $_[1] & 2**4;	# outline
+      $attrib .= "shadow "  if $_[1] & 2**4;	# shadow
+   }
+
+   { # color
+      $font{"FG_COL_NO"} = $_[2];
+   }
+
+   { # bold
+      $attrib .= "b "       if $_[3] >= 600;	# bold
+   }
+
+   { # super
+      $attrib .= "sup "      if $_[4] == 1;	# superscript
+      $attrib .= "sub "      if $_[4] == 2;	# subscript
+   }
+  
+   { # underline
+      $attrib .= "u "        if $_[5] & 3;	# single or double underline
+   }
+
+   $font{"ATTRIB"} = $attrib;
+
+   # family  
+   # charset
+   # unknown
+
+   { # Fontname
+      $font{"NAME"} = $_[9];
+   }
+
+   $S->font->[$num] = \%font;
+   #$S->dump_font($num);
+}
+
+sub dump_font {
+   my ($S, $num) = @_;
+   printf ("Font number %02x:\n", $num);
+   if (defined $S->font->[$num]) {
+      printf ("   Name        = '%s'\n", $S->font->[$num]->{"NAME"});
+      printf ("   Height      = '%s'\n", $S->font->[$num]->{"HEIGHT"});
+      printf ("   Attrib      = '%s'\n", $S->font->[$num]->{"ATTRIB"});
+      printf ("   Color index = %02x\n", $S->font->[$num]->{"FG_COL_NO"});
+   } else {
+      printf ("   Not defined!\n");
+   }
+   print "\n";
+   $S->font->[$num];
+}
+
+sub cell {
+   my ($S, $row, $col) = @_;
+   $S -> maxrow ($row) if $row > $S -> maxrow();
+   $S -> maxcol ($col) if $col > $S -> maxcol();
+   unless (defined $S -> sheet -> {$row} -> {$col}) {
+      my $Cell = {};
+      $S -> sheet -> {$row} -> {$col} = $Cell;
+   }
+   $S -> sheet -> {$row} -> {$col};
+}
+
+sub _Cell {
+   my ($S, $thing, $row, $col, $buf) = @_;
+   my $cell = $S -> cell($row, $col);
+   if (defined $buf) {
+      $cell -> {$thing} = $buf;
+   }
+   $cell -> {$thing};
+}
+
+sub Cell_Formula { shift -> _Cell("for", @_) }
+sub Cell_XF      { shift -> _Cell("xf",  @_) }
+sub Cell_Text    { shift -> _Cell("tex", @_) }
+
+sub rows { my ($S)       = @_; [sort {$a<=>$b} keys %{$S -> sheet}]; }
+sub cols { my ($S, $row) = @_; [sort {$a<=>$b} keys %{$S -> sheet -> {$row}}]; }
+
+sub XF_all {
+   my ($S, $XF) = @_;
+   if (defined $XF) {
+      (
+         $XF->{"FONT_NO"}, 
+         $XF->{"FORM_NO"}, 
+         $XF->{"BG_COL_NO"},
+         $XF->{"H_ALIGN"}, 
+         $XF->{"V_ALIGN"}, 
+      );
+   } else {
+      (
+         0, 
+         15, 
+         "",
+         # no bgcolor => transparent (default)
+      );
+   }
+}
+
+sub parse {
+##
+## debug: 1,2
+##
+   my ($S, $buf, $debug_level) = @_;
+
+   my $text = "";
+
+   my ($fsize, $l, $o, $type);
+   my ($row, $col, $style, $len, $num);
+   my ($xdebug);
+
+   $fsize=length($buf);
+
+   $o = 0;
+   while ($o<$fsize) {
+      #
+      # 00 word  type of entry
+      # 02 word  len of entry
+      #
+      ($type, $l) = get_nword(2, \$buf, $o); $o+=4;
+      $xdebug=0;
+
+      if (0x0000 == $type) {
+      } elsif (0x0006 == $type) { # Cell: Formula
+         # ...
+         # 14 word  strlen
+         # 16 char* math
+         #
+         ($dest_row, $dest_col, $style) = get_nword(3, \$buf, $o);
+         my $math = substr($buf, $o+0x16, get_word(\$buf, $o+0x14));
+
+         $S -> Cell_XF      ($dest_row+1, $dest_col+1, $style);
+         $S -> Cell_Formula ($dest_row+1, $dest_col+1, $math);
+      } elsif (0x000e == $type) { # Doc: Default number precision
+         # 00 word  precision
+         $S -> precision (get_word(\$buf, $o)+1);
+      } elsif (0x0014 == $type) { # Doc: Page header
+         # 00 byte  strlen
+         # 01 char* Format-text
+      } elsif (0x0015 == $type) { # Doc: Page footer
+         # 00 byte  strlen
+         # 01 char* Format-text
+      } elsif (0x0031 == $type) { # Doc: Font
+         # 00 word  height     (twips)
+         # 02 word  attrib     Bit 1:italic, 3:strikeout, 4:outline, 5:shadow
+         # 04 word  color      index 
+         # 06 word  bold       (0x0190==standard_plain, 0x02bc==standard_bold)
+         # 08 word  super      0:none 1:superscript 2:subscript
+         # 0a byte  underline  0:none 1:single 2:double +0x20:accounting
+         # 0b byte  family  
+         # 0c byte  charset
+         # 0d byte  unknown
+         # 0e byte  strlen
+         # 0f char* Fontname
+         $S -> add_font (
+            get_struct("WWWWWBBBB", \$buf, $o),
+            substr($buf, $o+0x0f, get_byte(\$buf, $o+0xe))
+         );
+      } elsif (0x0042 == $type) { # Doc: Codepage
+         # 00 word  codepage
+         $text .= sprintf("Codepage %d\n", get_word(\$buf, $o));
+      } elsif (0x004d == $type) { # Doc: Printer Info
+         # printer info
+      } elsif (0x005c == $type) { # Doc: Authress
+         # authress?
+         # 00 byte  strlen
+         # 01 char* 
+         $S -> authress ( substr($buf, $o+1, get_byte(\$buf, $o)) );
+      } elsif (0x007d == $type) { # Cell: width of column
+         #
+         # 00 word  row
+         # 02 word  column
+         # 04 word  width of column (1366 =^ 1 cm)
+         # 06 byte[5] unknown
+         #
+      } elsif (0x0085 == $type) { # Doc: Table
+         #
+         # 00 long  offset    Table starts at this offset
+         # 04 word  unknown
+         # 06 byte  strlen
+         # 07 char*           Name of table
+         #
+         # Can defines several tables, here I just take the first...
+         if (!$Sheet -> Table_Name) {
+            my ($to, $q, $strlen) = get_struct("LWB", \$buf, $o);
+            $Sheet -> Table_Name (substr($buf, $o+7, $strlen));  
+         } else {
+            $Sheet -> Table_Name ("");
+         }
+         $text .= sprintf("Table: %s\n",
+            substr($buf, $o+7, get_byte(\$buf, $o+6))
+         );
+      } elsif (0x0092 == $type) { # Document: Color Table
+         my $num = get_word(\$buf, $o);
+         my @colors = get_nlong($num, \$buf, $o+2);
+         $S -> load_colormap (\@colors);
+      } elsif (0x00e0 == $type) { # Document: Extended Format
+         #
+         # 00 word    font index
+         # 02 word    format index
+         # 04 word    something
+         # 06 word    alignment
+         # 08 word    bgcolor
+         # 0a word[3] something
+         $S -> add_xf (get_struct("WWWWWWWW", \$buf, $o));
+      } elsif (0x0201 == $type) { # Cell: empty
+         ($row, $col, $style) = get_nword(3, \$buf, $o);
+         $S -> Cell_XF    ($row+1, $col+1, $style);
+         $S -> Cell_Text  ($row+1, $col+1, "");
+      } elsif (0x0203 == $type) { # Cell: Real
+         #
+         # 00 word    row
+         # 02 word    column
+         # 04 word    style #
+         # 06 double  (Intel format)
+         #
+         ($row, $col, $style, $float) = get_struct("WWWD", \$buf, $o);
+         $text .= sprintf("Cell %02d:%02d [%02x] $float\n",
+            $row, $col, $style
+         );
+         $S -> Cell_XF    ($row+1, $col+1, $style);
+         $S -> Cell_Text  ($row+1, $col+1, "$float");
+      } elsif (0x0204 == $type) { # Cell: Text
+         #
+         # 00 word  row
+         # 02 word  column
+         # 04 word  style #
+         # 06 word  strlen
+         # 08 char* 
+         #
+         ($row, $col, $style, $len) = get_nword(4, \$buf, $o);
+         $text .= sprintf("Cell %02d:%02d [%02x] %s\n",
+            $row, $col, $style, substr($buf, $o+8, $len)
+         );
+         $S -> Cell_XF    ($row+1, $col+1, $style);
+         $S -> Cell_Text  ($row+1, $col+1, substr($buf, $o+8, $len));
+      } elsif (0x0208 == $type) { # Row
+      } elsif (0x027e == $type) { # Datum
+         ($row, $col, $style) = get_nword(3, \$buf, $o);
+         $float = "\0\0\0\0".substr($buf, $o+6, 4);
+         $float = get_double(\$float, 0);
+         $S -> Cell_XF    ($row+1, $col+1, $style);
+         $S -> Cell_Text  ($row+1, $col+1, "$float");
+      } elsif (0x0293 == $type) { # Doc: Style
+         #
+         # 00 byte  number?
+         # 01 byte  0x80
+         # 02 byte  number?
+         # 03 byte  0xff
+      } elsif (0x041e == $type) { # Doc: Formatstring
+         #
+         # 00 word  format number
+         # 02 byte  strlen
+         # 03 char* formatstring
+         $num = get_word(\$buf, $o+0);
+         $len = get_byte(\$buf, $o+2);
+         $S -> add_format ($num, substr($buf, $o+3, $len));
+      } elsif (0x0809 == $type) { # Doc: New Table
+         #
+         # 00 byte[8]  unknown
+         #
+      } else {
+         $xdebug = 1;
+      }
+
+      if ($debug_level==1 && $xdebug || $debug_level==2) {
+         printf("type = %04x (o=%06x, l=%04x):\n", $type, $o-4, $l);
+         my @list = (); my $str = substr($buf, $o, $l);
+         while($str) {
+            push(@list, substr($str, 0, 16)); 
+            substr($str, 0, 16)="";
+         }
+         for (@list) {
+            my $s = "   "; my $l = length($_); next if !$l;
+            $s .= sprintf("%02x " x $l, unpack("C$l", $_));
+            $s .= " " x (55 - length($s));
+            s/[^0-9a-zA-Z ‰ˆ¸ƒ÷‹_;,:.#@<>\|\^\∞\'\~\+\*\-\!\"\ß\$\%\&\/\(\)\]]/./g;
+            $s .= $_;
+            print "$s\n";
+         }
+      }
+
+      $o += $l;
+   }
+   foreach $row (@{$S->rows}) {
+      foreach $col (@{$S->cols($row)}) {
+         $S->calculate($row, $col);
+      }
+   }
+   $S->default_fg_color(
+      0  # assume color 0 to be default... 
+   );
+1}
+
+sub _float_to_date { # F
+   my ($date) = @_;
+   $date;
+
+   my @monsum = (
+      0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334,
+      -1, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335
+   );
+
+   my ($day, $month, $year, $switch, $i);
+
+   $year = int( $date/365.2425 ) + 1900;
+   $switch = !($year%4) && 12 || 0;
+
+   $date -= int($year-1900)*365 + int(($year-1900)/4);
+
+   for($i=11; $i && ($date <= $monsum[$switch+$i]); $i--) {}
+   $month = $i+1;
+   $day   = $date - $monsum[$switch+$i];
+
+   $date = sprintf("%02d.%02d.%02d", $day, $month, $year);
 }
 
 sub calculate {
@@ -610,9 +1225,9 @@ sub calculate {
             for (@list) {
                if ($c==0x04) {		# summe
                   if (!defined $val) { $val = $_ } else { $val += $_; }
-               } elsif ($c==0x24) {      	# und
+               } elsif ($c==0x24) {    	# und
                   $val = $_ ? 1 : 0; last if !$val;
-               } elsif ($c==0x25) {      	# und
+               } elsif ($c==0x25) {    	# oder
                   $val = $_ ? 1 : 0; last if $val;
                } elsif ($c==0xb7) {	# produkt
                   if (!defined $val) {$val=$_} else { $val *= $_; }
@@ -644,352 +1259,6 @@ sub calculate {
    $S -> Cell_Text ($dest_row, $dest_col, "$val");
 }
 
-sub add_format {
-#
-# $S,
-# 0 font#, 1 format#, 2 unkown, 3 align, 4 unknown, 5, 6, 7 unknown
-#
-   my $S = shift;
-   my $num = $S->_num_of_formats;
-   $num++;
-   $S->_num_of_formats($num);
-   $S->format->[$num] = [$_[0], $_[1]];
-   #printf("Adding format %02x: font#=%02x format#=%02x\n", $num, $_[0], $_[1]);
-}
-
-sub add_font {
-#
-# $S, 
-# 0 $height, 1 $attrib, 2 $color, 3 $bold, 4 $super, 5 $underline, 6 $family, 
-# 7 $charset, 8 $unknown, 9 $name
-#
-   my $S = shift;
-   my $num = $S->_num_of_fonts;
-   $num++;
-   $num++ if $num==5;
-
-   $S->_num_of_fonts($num);
-
-   my $open = ""; my $close = "";
-   my $font_open = ""; my $font_close="";
-
-   { # height
-      my $height = $_[0] / 20;
-      my $size = undef;
-      if ($height <= 7) {
-         $size = "-2";
-      } elsif ($height <= 10) {
-         $size = "-1";
-      } elsif ($height <= 12) {
-         # 3
-      } elsif ($height <= 18) {
-         $size = "+1";
-      } elsif ($height <= 24) {
-         $size = "+2";
-      } elsif ($height <= 32) {
-         $size = "+3";
-      } else {
-         $size = "+4";
-      }
-      $font_open .= " SIZE=$size" if defined $size;
-   }
-
-   { # attrib
-      if ($_[1] & 2**1) { $open .= "<I>"; $close .= "</I>"; }
-      if ($_[1] & 2**3) { } # struck_out
-      if ($_[1] & 2**4) { } # outline
-      if ($_[1] & 2**5) { } # shadow
-   }
-
-   # color
-   # must be handled after loading the color-map...
-
-   { # bold
-      if ($_[3] >= 600) { $open .= "<B>"; $close .= "</B>"; }
-   }
-
-   { # super
-      if ($_[4] == 1) { $open .= "<SUP>"; $close .= "</SUP>"; }
-      if ($_[4] == 2) { $open .= "<SUB>"; $close .= "</SUB>"; }
-   }
-  
-   { # underline
-      if ($_[5] & 3) { $open .= "<U>"; $close .= "</U>"; } # single or double
-   }
-
-   # printf "Adding Font %02x: %s, ", $S->_num_of_fonts, $_[9];
-   # print "<font$font_open>$open bla $close</FONT>\n";
-
-   # family  
-   # charset
-   # unknown
-   # Fontname
-
-   $font_open = "FONT$font_open" if $font_open;
-   $font_close = "</FONT>" if $font_open;
-   $S->font->[$num] = [$font_open, $open, $close, $font_close, $_[2]];
-   # printf("Adding font %02x: color#=%02x\n", $num, $_[2]);
-}
-
-sub cell {
-   my ($S, $row, $col) = @_;
-   $S -> maxrow ($row) if $row > $S -> maxrow();
-   $S -> maxcol ($col) if $col > $S -> maxcol();
-   unless (defined $S -> sheet -> {$row} -> {$col}) {
-      my $Cell = {};
-      $S -> sheet -> {$row} -> {$col} = $Cell;
-   }
-   $S -> sheet -> {$row} -> {$col};
-}
-
-sub _Cell {
-   my ($S, $thing, $row, $col, $buf) = @_;
-   my $cell = $S -> cell($row, $col);
-   if (defined $buf) {
-      $cell -> {$thing} = $buf;
-   }
-   $cell -> {$thing};
-}
-
-sub rows { my ($S)       = @_; [sort {$a<=>$b} keys %{$S -> sheet}]; }
-sub cols { my ($S, $row) = @_; [sort {$a<=>$b} keys %{$S -> sheet -> {$row}}]; }
-
-sub Cell_Formula { shift -> _Cell("for", @_) }
-sub Cell_Style   { shift -> _Cell("sty", @_) }
-sub Cell_Text    { shift -> _Cell("tex", @_) }
-
-sub Cell_Font {
-   my ($S, $row, $col) = @_;
-   $font = $S -> font -> [
-      $S -> format -> [$S->Cell_Style($row, $col)] -> [0]
-   ];
-}
-
-sub parse {
-##
-## color: 255==no_color  bit1==nocellcolor
-## debug: 1,2
-##
-   my ($S, $buf, $allow_color, $debug_level) = @_;
-
-   my $text = "";
-
-   my ($fsize, $l, $o, $type);
-   my ($row, $col, $style, $len, $num);
-   my ($xdebug);
-
-   $fsize=length($buf);
-
-   $o = 0;
-   while ($o<$fsize) {
-      #
-      # 00 word  type of entry
-      # 02 word  len of entry
-      #
-      ($type, $l) = get_nword(2, \$buf, $o); $o+=4;
-      $xdebug=0;
-
-      if (0x0000 == $type) {
-      } elsif (0x0006 == $type) { # Cell: Formula
-         # ...
-         # 14 word  strlen
-         # 16 char* math
-         #
-         ($dest_row, $dest_col, $style) = get_nword(3, \$buf, $o);
-         my $math = substr($buf, $o+0x16, get_word(\$buf, $o+0x14));
-
-         $S -> Cell_Style   ($dest_row+1, $dest_col+1, $style);
-         $S -> Cell_Formula ($dest_row+1, $dest_col+1, $math);
-      } elsif (0x000e == $type) { # Doc: Default number precision
-         # 00 word  precision
-         $S -> precision (get_word(\$buf, $o)+1);
-      } elsif (0x0014 == $type) { # Doc: Page header
-         # 00 byte  strlen
-         # 01 char* Format-text
-      } elsif (0x0015 == $type) { # Doc: Page footer
-         # 00 byte  strlen
-         # 01 char* Format-text
-      } elsif (0x0031 == $type) { # Doc: Font
-         # 00 word  font       height (twips)
-         # 02 word  attrib     Bit 1:italic, 3:struck_out, 4:outline, 5:shadow
-         # 04 word  color      index 
-         # 06 word  bold       (0x0190==standard_plain, 0x02bc==standard_bold)
-         # 08 word  super      0:none 1:superscript 2:subscript
-         # 0a byte  underline  0:none 1:single 2:double +0x20:accounting
-         # 0b byte  family  
-         # 0c byte  charset
-         # 0d byte  unknown
-         # 0e byte  strlen
-         # 0f char* Fontname
-         $S -> add_font (
-            get_struct("WWWWWBBBB", \$buf, $o),
-            substr($buf, $o+0x0f, get_byte(\$buf, $o+0xe))
-         );
-      } elsif (0x0042 == $type) { # Doc: Codepage
-         # 00 word  codepage
-         $text .= sprintf("Codepage %d\n", get_word(\$buf, $o));
-      } elsif (0x004d == $type) { # Doc: Printer Info
-         # printer info
-      } elsif (0x005c == $type) { # Doc: Authress
-         # authress?
-         # 00 byte  strlen
-         # 01 char* 
-         $S -> authress ( substr($buf, $o+1, get_byte(\$buf, $o)) );
-      } elsif (0x007d == $type) { # Cell: width of column
-         #
-         # 00 word  row
-         # 02 word  column
-         # 04 word  width of column (1366 =^ 1 cm)
-         # 06 byte[5] unknown
-         #
-      } elsif (0x0085 == $type) { # Doc: Table
-         #
-         # 00 long  offset    Table starts at this offset
-         # 04 word  unknown
-         # 06 byte  strlen
-         # 07 char*           Name of table
-         #
-         # Can defines several tables, here I just take the first...
-         if (!$Sheet -> Table_Name) {
-            my ($to, $q, $strlen) = get_struct("LWB", \$buf, $o);
-            $Sheet -> Table_Name (substr($buf, $o+7, $strlen));  
-         } else {
-            $Sheet -> Table_Name ("");
-         }
-         $text .= sprintf("Table: %s\n",
-            substr($buf, $o+7, get_byte(\$buf, $o+6))
-         );
-      } elsif (0x0092 == $type) { # Document: Color Table
-         my $num = get_word(\$buf, $o);
-         my @colors = get_nlong($num, \$buf, $o+2);
-         $S -> load_colormap (\@colors) 
-            unless ($allow_color==255 || $allow_color&1)
-         ;
-      } elsif (0x00e0 == $type) { # Document: Extended Format
-         #
-         # 00 word    font index
-         # 02 word    format index
-         # 04 word    something
-         # 06 word    alignment
-         # 08 word    something
-         # 0a word[3] something
-         $S -> add_format (
-            get_struct("WWWWWWWW", \$buf, $o)
-         );
-      } elsif (0x0201 == $type) { # Cell: empty
-         ($row, $col, $style) = get_nword(3, \$buf, $o);
-         $S -> Cell_Style ($row+1, $col+1, $style);
-         $S -> Cell_Text  ($row+1, $col+1, "");
-      } elsif (0x0203 == $type) { # Cell: Real
-         #
-         # 00 word    row
-         # 02 word    column
-         # 04 word    style #
-         # 06 double  (Intel format)
-         #
-         ($row, $col, $style, $float) = get_struct("WWWD", \$buf, $o);
-         $text .= sprintf("Cell %02d:%02d [%02x] $float\n",
-            $row, $col, $style
-         );
-         $S -> Cell_Style ($row+1, $col+1, $style);
-         $S -> Cell_Text  ($row+1, $col+1, "$float");
-      } elsif (0x0204 == $type) { # Cell: Text
-         #
-         # 00 word  row
-         # 02 word  column
-         # 04 word  style #
-         # 06 word  strlen
-         # 08 char* 
-         #
-         ($row, $col, $style, $len) = get_nword(4, \$buf, $o);
-         $text .= sprintf("Cell %02d:%02d [%02x] %s\n",
-            $row, $col, $style, substr($buf, $o+8, $len)
-         );
-         $S -> Cell_Style ($row+1, $col+1, $style);
-         $S -> Cell_Text  ($row+1, $col+1, substr($buf, $o+8, $len));
-      } elsif (0x0208 == $type) { # Row
-      } elsif (0x027e == $type) { # Datum
-         ($row, $col, $style) = get_nword(3, \$buf, $o);
-         $float = "\0\0\0\0".substr($buf, $o+6, 4);
-         $float = get_double(\$float, 0);
-         $S -> Cell_Style ($row+1, $col+1, $style);
-         $S -> Cell_Text  ($row+1, $col+1, "$float");
-      } elsif (0x0293 == $type) { # Doc: Style
-         #
-         # 00 byte  number?
-         # 01 byte  0x80
-         # 02 byte  number?
-         # 03 byte  0xff
-      } elsif (0x041e == $type) { # Doc: Formatstring
-         #
-         # 00 word  format number
-         # 02 byte  strlen
-         # 03 char* formatstring
-         $num = get_word(\$buf, $o+0);
-         $len = get_byte(\$buf, $o+2);
-         $text .= sprintf("Format %02x: %s\n", $num, substr($buf, $o+3, $len));
-      } elsif (0x0809 == $type) { # Doc: New Table
-         #
-         # 00 byte[8]  unknown
-         #
-      } else {
-         $xdebug = 1;
-      }
-
-      if ($debug_level==1 && $xdebug || $debug_level==2) {
-         printf("type = %04x (o=%06x, l=%04x):\n", $type, $o-4, $l);
-         my @list = (); my $str = substr($buf, $o, $l);
-         while($str) {
-            push(@list, substr($str, 0, 16)); 
-            substr($str, 0, 16)="";
-         }
-         for (@list) {
-            my $s = "   "; my $l = length($_); next if !$l;
-            $s .= sprintf("%02x " x $l, unpack("C$l", $_));
-            $s .= " " x (55 - length($s));
-            s/[^0-9a-zA-Z ‰ˆ¸ƒ÷‹_;,:.#@<>\|\^\∞\'\~\+\*\-\!\"\ß\$\%\&\/\(\)\]]/./g;
-            $s .= $_;
-            print "$s\n";
-         }
-      }
-
-      $o += ($l);
-   }
-   foreach $row (@{$S->rows}) {
-      foreach $col (@{$S->cols($row)}) {
-         $S->calculate($row, $col);
-      }
-   }
-   $S->default_color(
-      $S->font->[
-         $S->format->[15]->[0]
-      ]->[4]
-   );
-1}
-
-sub _float_to_date { # F
-   my ($date) = @_;
-   $date;
-
-   my @monsum = (
-      0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334,
-      -1, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335
-   );
-
-   my ($day, $month, $year, $switch, $i);
-
-   $year = int( $date/365.2425 ) + 1900;
-   $switch = !($year%4) && 12 || 0;
-
-   $date -= int($year-1900)*365 + int(($year-1900)/4);
-
-   for( $i=11; $i && ($date <= $monsum[$switch+$i]); $i--) {}
-   $month = $i+1;
-   $day   = $date - $monsum[$switch+$i];
-
-   $date = sprintf("%02d.%02d.%02d", $day, $month, $year);
-}
-
 "Atomkraft? Nein, danke!"
 
 __END__
@@ -1010,10 +1279,10 @@ herbert expenses.xls --noinfo
 
 =head1 DESCRIPTION
 
- Herbert V1.19 (1998/03/03) - ALPHA - converts Excel-Sheets to HTML
+ Herbert V1.31 (1998/03/10) - ALPHA - converts Excel-Sheets to HTML
  usage: Herbert {--option [arg]} file(s)
     --colorframe s  Outer frame will get color #s (9999bf)
-    --colorsheet s  Worksheet will get color #s (cfcfcf)
+    --colorsheet s  Worksheet will get color #s (dfdfdf)
     --dest_base  s  Store output files based at this directory.
     --dirmode    s  New directories get access mode s (0700)
     --filemode   s  New files get access mode s (0600)
@@ -1032,6 +1301,7 @@ herbert expenses.xls --noinfo
     --src_base   s  Regard this as start directory in relative mode.
     --suffix     s  Output files shall get suffix s (.html)
     --to_stdout     Write output to stdout.
+    --usefonts      Use the font faces defined in excel sheet
 
 =head1 SEE ALSO
 
@@ -1043,16 +1313,25 @@ L<OLE::Storage>, L<Startup>
 
 =item -
 
-Cell styles are not resolved correctly. This results in dates represented as
-number, wrong colors and more. Will get fixed sooner or later. 
+Math doesn't work for processors, that doesn't use the number format used 
+by Intel.
 
-=item Missing
+=item -
 
-Graphics.
+Cell formats are not resolved yet. This means especially, that days and
+currencies are not represented correctly.
 
-Some functions, even some mathematical functions.
+=item -
 
-Lots more.
+No graphics, no embedded objects.
+
+=item -
+
+Some functions are missing, even some mathematical functions.
+
+=item -
+
+Lots more is missing.
 
 =back
 

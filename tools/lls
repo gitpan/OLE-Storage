@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#$Id: lls,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
+#$Id: lls,v 1.2 1998/03/11 08:19:20 schwartz Exp $
 #
 # lls, Laola List
 #
@@ -29,8 +29,8 @@
 #
 
 my $PROGNAME = "lls";
-my $VERSION=do{my@R=('$Revision: 1.1.1.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
-my $DATE = ('$Date: 1998/02/25 21:13:00 $' =~ / ([^ ]*) /) && $1;
+my $VERSION=do{my@R=('$Revision: 1.2 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $DATE = ('$Date: 1998/03/11 08:19:20 $' =~ / ([^ ]*) /) && $1;
 
 use Getopt::Long;
 use Startup;
@@ -203,6 +203,7 @@ sub ppss_info {
    # generate some information about the root entry of the property 
    # set storage
    #
+   $global_pps_count=0;
    pps_info(0,0,0);
 }
 

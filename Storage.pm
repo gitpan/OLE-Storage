@@ -1,5 +1,5 @@
 #
-# $Id: Storage.pm,v 1.2 1998/02/25 22:55:12 schwartz Exp $
+# $Id: Storage.pm,v 1.4 1998/03/11 08:19:18 schwartz Exp $
 #
 # OLE::Storage, a Structured Storage interface 
 #
@@ -56,7 +56,7 @@
 #
 
 package OLE::Storage;
-my $VERSION=do{my@R=('$Revision: 1.2 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $VERSION=do{my@R=('$Revision: 1.4 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
 $[=0;
 
 #  
@@ -81,6 +81,7 @@ no strict;
 use OLE::Storage::Std;
 use OLE::Storage::Var();
 use OLE::Storage::Io(); 
+use OLE::Storage::Iolist(); 
 
 sub Startup  { my $S=shift; $S->{STARTUP} = shift if @_; $S->{STARTUP} }
 sub Var      { my $S=shift; $S->{VAR}     = shift if @_; $S->{VAR} }
@@ -174,6 +175,13 @@ sub directory {
       }
    }
 1}
+
+sub clsid { 
+#
+# Property(lpwstr) = name($pps);
+#
+   $_[0]->{PPS}[$_[1]]->{CLSID};
+}
 
 sub name { 
 #
@@ -878,11 +886,12 @@ __END__
 
 OLE::Storage - An Interface to B<Structured Storage> Documents.
 
-$Revision: 1.2 $ $Date: 1998/02/25 22:55:12 $
+$Revision: 1.4 $ $Date: 1998/03/11 08:19:18 $
 
 =head1 SYNOPSIS
 
 use OLE::Storage()
+
 use Startup;
 
 I<$Var> = OLE::Storage->NewVar ();
@@ -915,6 +924,12 @@ support with next release.
 C<1>||C<O> == I<$D> -> close ()
 
 Close the document.
+
+=item clsid
+
+I<$clsid> == I<$D> -> clsid (I<$pps>)
+
+Returns the CLSID of the property I<$pps> as CLSID Property.
 
 =item date
 
