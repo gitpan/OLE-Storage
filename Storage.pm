@@ -1,5 +1,5 @@
 #
-# $Id: Storage.pm,v 1.4 1998/03/11 08:19:18 schwartz Exp $
+# $Id: Storage.pm,v 1.7 1998/03/24 02:47:14 schwartz Exp $
 #
 # OLE::Storage, a Structured Storage interface 
 #
@@ -48,6 +48,7 @@
 #   - Human rights and civil rights where you live.
 #
 #   - Reformfraktion president for Technische Universität Berlin.
+#
 #   - creating documents 
 #   - many property set things: 
 #     *  documentation of variable types
@@ -56,7 +57,7 @@
 #
 
 package OLE::Storage;
-my $VERSION=do{my@R=('$Revision: 1.4 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $VERSION=do{my@R=('$Revision: 1.7 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
 $[=0;
 
 #  
@@ -65,7 +66,7 @@ $[=0;
 # especially to "methodize" all functions, but I didn't like the resulting 
 # code. May be I'll regret this once ;-), but momentarily I'm quite ok with: 
 # 
-no strict;
+no strict; $^W=0;
 
 #
 # Abbreviations
@@ -93,29 +94,47 @@ sub _error   { $S->{STARTUP} ? $S->{STARTUP}->error(@_) : 0 }
 ## File and directory handling
 ##
 
+sub check {
+#
+# 1||0 = check($Startup, $file [,$mode [,\$streambuf]]);
+#
+   # to do!
+   my ($proto, $Startup, $name, $mode, $bufR) = @_;
+   my $Io = OLE::Storage::Io->open($Startup, $name, $mode, $bufR)
+}
+
 sub open { 
 #
 # $Doc||0 = open($Startup, $Var, $file [,$mode [,\$streambuf]]);
 #
 # mode bitmask (0 is default):
 #
-# Bit 0:  0 read only   1 read and write
-# Bit 4:  0 file mode   1 buffer mode 
+# Bit 0 (0 read only, 1 read and write)
+# Bit 4 (0 file mode, 1 buffer mode)
+#
+# Own errors:
+#
+#	1   "'Var' object not specified!"
+#	2   IO->open error
+#       3   _init_doc error
 #
    my ($proto, $Startup, $Var, $name, $mode, $bufR) = @_;
    my $class = ref($proto) || $proto;
    local $S = bless(_init_vars(), $class);
 
    $S->Startup($Startup);
-   return _error("'Var' object not specified!") if !$S->Var($Var);
 
-   return 0 if !(
-      $S->{IO} = OLE::Storage::Io->open($Startup, $name, $mode, $bufR)
-   );
+   unless ($S->Var($Var)) {
+      return _error("'Var' object not specified!", 1) 
+   }
 
-   if (!_init_doc()) {
+   unless ($S->{IO} = OLE::Storage::Io->open($Startup, $name, $mode, $bufR)) {
+      return _error("", 2);
+   }
+
+   unless (_init_doc()) {
       $S->{IO} -> close($bufR);
-      return 0;
+      return _error("", 3);
    }
 
    $S;
@@ -136,6 +155,8 @@ sub is_directory {
    my ($S, $pps) = @_;
    ($S->{PPS}[$pps]->{TYPE} == 1) || $S->is_root($pps);
 }
+
+sub is_stream { goto &is_file }
 
 sub is_file { 
 #
@@ -178,9 +199,16 @@ sub directory {
 
 sub clsid { 
 #
-# Property(lpwstr) = name($pps);
+# Property(lpwstr) = clsid($pps);
 #
    $_[0]->{PPS}[$_[1]]->{CLSID};
+}
+
+sub color {
+#
+# 0(Black)||1(Red) = color($pps);
+#
+   $_[0]->{PPS}[$_[1]]->{COLOR};
 }
 
 sub name { 
@@ -288,20 +316,27 @@ sub _init_vars {
 }
 
 sub _init_doc {
-   # read bbd, 
-   # get bbd -> root-chain,  get bbd -> sbd-chain
-   my ($i, $tmp);
-   my (@tmp);
+#
+# read bbd, 
+# get bbd -> root-chain,  get bbd -> sbd-chain
+#
+# Own errors:
+# 	1  "$fn is no Ole / Compound Document!"
+#       2  "Document is corrupt (size too small)."
+#       3  "Document is corrupt (no root entry defined)."
+#       4  "Document is corrupt (Cannot read root entry)."
+#
+   my ($i, $tmp, @tmp);
 
    # little integrity check 1
    {
-      my $fn = '"'.$S->{IO}->name().'"';
-      return _error("$fn is no Ole / Compound Document!")
-         if !(
-            (read_long($S->{IO}, 0)==0xe011cfd0) && 
-            (read_long($S->{IO}, 4)==0xe11ab1a1) 
-         )
-      ; 
+      unless (
+         (read_long($S->{IO}, 0)==0xe011cfd0) && 
+         (read_long($S->{IO}, 4)==0xe11ab1a1) 
+      ) {
+         my $fn = '"'.$S->{IO}->name().'"';
+         return _error("$fn is no Ole / Compound Document!", 1);
+      }
    }
 
    # header data
@@ -325,7 +360,7 @@ sub _init_doc {
    # little integrity check 2
    {
       $S->{BL}->{B_NUM} = int ( ($S->{IO}->size()-_h_s()) / _b_s() -1 );
-      return _error("Document is corrupt (size too small).") 
+      return _error("Document is corrupt (size too small).", 2) 
          if $S->{BL}->{B_NUM}<1
       ;
    }
@@ -366,7 +401,7 @@ sub _init_doc {
 
    # root chain
    {
-      return _error("Document is corrupt (no root entry).") if !@{
+      return _error("Document is corrupt (no root entry defined).", 3) if !@{
          $S->{BL}->{ROOTL} = _get_list_from_depot($S->{HEAD}->{ROOT_SB}, "B")
       };
    }
@@ -379,7 +414,7 @@ sub _init_doc {
 
    # property storages, just read root entry.
    {
-      return _error ("Document is corrupt (no root entry).")
+      return _error ("Document is corrupt (Cannot read root entry).", 4)
          if !_read_ppss(0)
       ;
    }
@@ -488,7 +523,7 @@ sub _read_ppss_buf {
 # 0..NLEN char()  NAME    
 # 40      word    NLEN 
 # 42      byte    TYPE        
-# 43      byte    UK0         
+# 43      byte    COLOR         
 # 44      long    PREV        
 # 48      long    NEXT        
 # 4c      long    DIR         
@@ -504,7 +539,7 @@ sub _read_ppss_buf {
    return 1 if defined $S->{PPS}[$i];
 
    my $P = {};
-   ($P->{NLEN}, $P->{TYPE}, $P->{UK0}, $P->{PREV}, $P->{NEXT}, $P->{DIR})
+   ($P->{NLEN}, $P->{TYPE}, $P->{COLOR}, $P->{PREV}, $P->{NEXT}, $P->{DIR})
       = get_struct("WBBLLL", $bufR, $o+0x40)
    ;
 
@@ -549,15 +584,15 @@ sub _get_ppss_chain {
 #
 # @blocks = _get_ppss_chain($ppss)
 #
-# !recursive!
+# !recursive!, doesn't care about red/black sorting  
 #
    ($_[0] == 0xffffffff ?
-       () : 
-       _read_ppss($_[0]) && (
-          _get_ppss_chain($S->{PPS}[$_[0]]->{PREV}),
-          $_[0],
-          _get_ppss_chain($S->{PPS}[$_[0]]->{NEXT}),
-       )
+      () : 
+      _read_ppss($_[0]) && (
+         _get_ppss_chain($S->{PPS}[$_[0]]->{PREV}),
+         $_[0],
+         _get_ppss_chain($S->{PPS}[$_[0]]->{NEXT}),
+      )
    );
 }
 
@@ -886,7 +921,7 @@ __END__
 
 OLE::Storage - An Interface to B<Structured Storage> Documents.
 
-$Revision: 1.4 $ $Date: 1998/03/11 08:19:18 $
+$Revision: 1.7 $ $Date: 1998/03/24 02:47:14 $
 
 =head1 SYNOPSIS
 

@@ -1,5 +1,5 @@
 #
-# $Id: Io.pm,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
+# $Id: Io.pm,v 1.2 1998/03/23 02:53:45 schwartz Exp $
 #
 # Io.pm
 #
@@ -25,9 +25,10 @@
 
 package OLE::Storage::Io;
 use strict;
-my $VERSION=do{my@R=('$Revision: 1.1.1.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $VERSION=do{my@R=('$Revision: 1.2 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
 my $IOnum = 0;
 
+use Symbol;
 use OLE::Storage::Iolist(); 
 
 sub close {
@@ -264,7 +265,7 @@ sub _init_file {
 
    my $status;
    my $fn = $S->_name;
-   my $IOname = "$class.$S.$$.".$IOnum++;
+   my $IOname = gensym;
 
    return $S->_error("File \"$fn\" does not exist!")   if ! -e $fn;
    return $S->_error("\"$fn\" is a directory!")        if   -d $fn;
@@ -280,7 +281,7 @@ sub _init_file {
       $status = open($IOname, $fn);
    }
    return $S->_error("Cannot open \"$fn\"!") if !$status;
-   $S->_io(*$IOname{IO});
+   $S->_io($IOname);
 
    binmode($S->_io); 
    if ($S->_writable) {

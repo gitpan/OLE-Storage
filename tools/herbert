@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#$Id: herbert,v 1.31 1998/03/10 08:59:11 schwartz Exp $
+#$Id: herbert,v 1.38 1998/03/24 02:49:05 schwartz Exp $
 #
 # Herbert - Converts a simple Excel document to some kind of HTML.
 #
@@ -30,15 +30,15 @@
 #
 
 my $PROGNAME = "Herbert";
-my $VERSION=do{my@R=('$Revision: 1.31 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
-my $DATE = ('$Date: 1998/03/10 08:59:11 $' =~ / ([^ ]*) /) && $1;
+my $VERSION=do{my@R=('$Revision: 1.38 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $DATE = ('$Date: 1998/03/24 02:49:05 $' =~ / ([^ ]*) /) && $1;
 
 no strict; $^W=0;
 use Getopt::Long;
-use OLE::Storage::Std;
 
-my ($Doc, $Startup, $Var, $text);
-my ($Sheet);
+my $defaultname = "spreadsheet";
+
+my ($Book, $Startup, $text);
 
 my %opt = (
    "dirmode"    => "0700",
@@ -76,14 +76,12 @@ main: {
       "suffix=s",   
    );
    herbert() if $opt{"herbert"};
-   usage() if !@ARGV || $opt{"help"};
+   usage() if $opt{"help"};
+   usage() if !@ARGV && !$opt{"from_stdin"};
 
-   require OLE::Storage;
-   require Unicode::Map;
    require Startup;
 
    fail(1) unless $Startup = new Startup;
-   fail(2) unless $Var = OLE::Storage->NewVar();
 
    $Startup -> init ({
       SUB_FILES  => \&handle_files,
@@ -99,10 +97,8 @@ main: {
       DIRMODE    => $opt{"dirmode"},
    });
 
-   $Startup->msg_silent(1) if $opt{"to_stdout"};
    $Startup->allow_logging if $opt{"log"};
    $Startup->open_log();
-   $Startup->log('s/'.$opt{"search"}.'/'.$opt{"replace"}.'/'.$opt{"mode"});
    if ($opt{"to_stdout"}) {
       $Startup->log("writing to STDOUT");
    } elsif ($opt{"suffix"}) {
@@ -117,60 +113,75 @@ main: {
 
 sub handle_stream {
    my ($dp) = @_;
+
+   $Startup->msg_reset();
+   $Startup->msg_silent(1) if $opt{"to_stdout"};
+
    $Startup->log("processing <STDIN>");
-   {
-      return $Startup->error("Nothing to do!") if -t STDIN;
-      undef $/;
-      return 0 if !($Doc = 
-         OLE::Storage->open($Startup, $Var, "<stdin>", 2**4, \<>)
-      );
-   }
-   return 0 if !main_work(0, 0, "$dp/stdin");
-1}
+   return $Startup->error("Nothing to do!") if -t STDIN;
+   undef $/; 
+
+   main_work("", "stdin", "$dp", <>);
+}
 
 sub handle_files {
    my ($sp, $sf, $dp, $status) = @_;
+
    $Startup->msg_reset();
+   $Startup->msg_silent(1) if $opt{"to_stdout"};
 
    $Startup->log("processing $sp/$sf");
    $Startup->msg("Processing \"$sf\"");
 
-   return $Startup->error ("File \"$sf\" doesn't exist!") if !$status;
+   return $Startup->error ("File \"$sf\" doesn't exist!") unless $status;
    return 1 if $status < 0;
-   {
-      return 0 unless $Doc = OLE::Storage->open($Startup, $Var, "$sp/$sf");
-      $status = main_work($sp, $sf, $dp);
-      $Doc->close($infile);
-   }
-   return 0 if !$status;
+   return 0 unless main_work($sp, $sf, $dp);
+
    $Startup->msg_finish("done");
+   $Startup->log("done");
 1}
 
 sub main_work {
-   my ($sp, $sf, $dp) = @_;
+   my ($sp, $sf, $dp, $buf) = @_;
 
-   $dp = "$dp/". basename($sf) . $opt{"suffix"};
+   if (basename($sf)) {
+      $dp = "$dp/". basename($sf) . $opt{"suffix"};
+   } else {
+      $dp = "$dp/$defaultname.". $opt{"suffix"};
+   }
 
    if (!$opt{"overwrite"}) {
       return $Startup->error("File \"$dp\" already exists!") if -e $dp;
    }
 
-   return $Startup->error("I don't understand this file!") 
-      unless parse_sheet()
-   ;
-   Sheet_to_HTML($sf);
+   return 0 unless $Book = herbert::open_document({
+      "PATH"	=> "$sp/$sf",
+      "BUF"	=> $buf,
+      "STARTUP" => $Startup,
+   });
 
-   if ($opt{"to_stdout"}) {
-      return print STDOUT "$text\n";
-   } else {
-      return $Startup->error("Cannot open output file \"$dp\"")
-         if !open OUTFILE, ">$dp"
-      ;
-      my $status = print OUTFILE "$text\n";
-      close OUTFILE;
-      return $Startup->error("Write error") if !$status;
-      return 1;
+   my $status = 0;
+   {
+      my $debug = $opt{"xdebug"}&&1 || $opt{"xxdebug"}&&2 || 0;
+      last unless $Book -> parse ($debug);
+      last unless Sheet_to_HTML ($sf);
+      if ($opt{"to_stdout"}) {
+         last unless print STDOUT "$text\n";
+      } else {
+         unless (open OUTFILE, ">$dp") {
+            $Startup->error("Cannot open output file \"$dp\"");
+            last;
+         }
+         my $status = print OUTFILE "$text\n";
+         close OUTFILE;
+         last unless $status;
+      }
+      $status = 1;
    }
+
+   $Book -> close_document();
+
+   $status;
 }
 
 sub fail {
@@ -199,7 +210,7 @@ sub usage {
         "colorframe s  Outer frame will get color #s (".$opt{"colorframe"}.")",
         "colorsheet s  Worksheet will get color #s (".$opt{"colorsheet"}.")",
         "herbert       Very short info about Herbert Baum.",
-        "usefonts      Use the font faces defined in excel sheet",
+        "usefonts      Use the font faces defined in excel book",
 
         "log           Write a logfile.",
         "src_base   s  Regard this as start directory in relative mode.",
@@ -240,27 +251,6 @@ sub _print_usage {
    print "$footer\n" if $footer;
 }
 
-sub parse_sheet {
-#
-# Excel (Biff5) style
-#
-# Biff is build as a long chain of data chunks. To find a chunk one has to 
-# go hand over hand through the file.
-#
-   $Sheet = herbert::new_document();
-
-   my %dir = (); 
-   return 0 unless $Doc->directory(0, \%dir, "string");
-
-   return $Startup->error("Not an Excel file!") unless my $pps=$dir{"Book"};
-
-   my ($buf);
-   return 0 unless $Doc->read($pps, \$buf);
-
-   my $debug_level = $opt{"xdebug"}&&1 || $opt{"xxdebug"}&&2;
-   return 0 unless $Sheet -> parse ($buf, $debug_level);
-1}
-
 sub Sheet_to_HTML() {
    my ($orig_file) = @_;
 
@@ -269,12 +259,14 @@ sub Sheet_to_HTML() {
    my @xf = ();
 
    my %html_attrib = (
-      "b"      => ["<B>",      "</B>"],
-      "i"      => ["<I>",      "</I>"],
-      "strike" => ["<STRIKE>", "</STRIKE>"],
-      "sub"    => ["<SUB>",    "</SUB>"],
-      "sup"    => ["<SUP>",    "</SUP>"],
-      "u"      => ["<U>",      "</U>"]
+      "b"       => ["<B>",      "</B>"],
+      "i"       => ["<I>",      "</I>"],
+      "outline" => ["<B>",      "</B>"],
+      "shadow"  => ["<I>",      "</I>"],
+      "strike"  => ["<STRIKE>", "</STRIKE>"],
+      "sub"     => ["<SUB>",    "</SUB>"],
+      "sup"     => ["<SUP>",    "</SUP>"],
+      "u"       => ["<U>",      "</U>"]
    );
 
    my %html_h_align = (
@@ -294,15 +286,15 @@ sub Sheet_to_HTML() {
    ##
 
    { 
-      my $default_fg_color = $Sheet -> default_fg_color();
+      my $default_fg_color = $Book -> default_fg_color();
 
-      for (0..$#{$Sheet->xf}) {
+      for (0..$#{$Book->xf}) {
 
-         my $XF = $Sheet -> xf -> [$_];
+         my $XF = $Book -> xf -> [$_];
          next unless defined $XF;
 
          my ($font_no, $format_no, $bg_col_no, $halign, $valign) = 
-            $Sheet -> XF_all ($XF)
+            $Book -> XF_all ($XF)
          ;
 
          my $td_open    = "";
@@ -316,7 +308,7 @@ sub Sheet_to_HTML() {
             #
             # font information 
             #
-            my $Font = $Sheet -> font -> [$font_no];
+            my $Font = $Book -> font -> [$font_no];
             last unless defined $Font;
    
             { # NAME
@@ -362,17 +354,16 @@ sub Sheet_to_HTML() {
                   last if $color==32767;
                   $color-=8 if $color>=8;
                   last if $color == $default_fg_color;  
-                  $font_open.=sprintf(" COLOR=#%06x", $Sheet->color->[$color]);
+                  $font_open.=sprintf(" COLOR=#%06x", $Book->color->[$color]);
                }
             }
 
             { # BG_COL_NO
                unless ($opt{"nocellcolor"}||$opt{"nocolor"}) {
-                  last unless defined $bg_col_no;
                   my $color = $bg_col_no;
                   $color -= 8 if $bg_col_no >= 8;
                   last if $color == 1; # assume color 1 to be default...
-                  my $color = $Sheet->color->[$color];
+                  my $color = $Book->color->[$color];
                   last if !defined $color;
                   $td_open.=sprintf(" BGCOLOR=#%06x", $color);
                }
@@ -428,13 +419,15 @@ sub Sheet_to_HTML() {
      "<!-- Source at: http://wwwwbs.cs.tu-berlin.de/~schwartz/perl/ -->\n\n"
    ;
    unless ($opt{"noinfo"}) {
-      my $aut = $Sheet->authress;
-      $text .= "<!-- Filename of original document: \"$orig_file\" -->\n";
+      my $aut = $Book->authress;
+      $text .= "<!-- Original document: \"$orig_file\", BIFF ".
+         $Book -> biff_version . " format -->\n"
+      ;
       $text .= "<!-- Authress of original document: \"$aut\" -->\n" if $aut;
       $text .= "\n";
    }
 
-   my $title = $Sheet -> Table_Name || "";
+   my $title = $Book -> Table_Name || "";
    $text .= "<H3>$title</H3>\n" if $title;
 
    my $colorsheet = ""; 
@@ -449,21 +442,21 @@ sub Sheet_to_HTML() {
    $text .= "<TABLE$grid$colorsheet>\n";
    unless ($opt{"noframe"}) {
       $text .= "<TR$colorframe><TD>&nbsp;</TD>\n";
-      for (1 .. $Sheet->maxcol) {
+      for (1 .. $Book->maxcol) {
          $text .= "  <TD><B>".($gridX++)."</B></TD>\n";
       }
       $text .= "</TR>\n";
    }
-   my $precision = $Sheet -> precision;
+   my $precision = $Book -> precision;
    my $align = "";
    my $row_c = 1; my $row = 0;
-   foreach $row_c (@{$Sheet->rows}) {
+   foreach $row_c (@{$Book->rows}) {
       if ($row || $opt{"nopack"}) {
          for (2 .. $row_c-$row) {
             $text .= "<TR>\n";
             $text .= "  <TD$colorframe><B>".($gridY++)."</B></TD>\n" 
                unless $opt{"noframe"};
-            for (1 .. $Sheet->maxcol) {
+            for (1 .. $Book->maxcol) {
                $text .= "  <TD>&nbsp;</TD>\n";
             }
             $text .= "</TR>\n";
@@ -474,22 +467,29 @@ sub Sheet_to_HTML() {
      
       $row = $row_c;
       $text .= "<TR VALIGN=BOTTOM ALIGN=LEFT>\n"; 
-      my $cell; my $font;
+      my $cell; my $combine; my $font;
       $text .= "  <TD$colorframe><B>".($gridY++)."</B></TD>\n" 
          unless $opt{"noframe"}
       ;
-      for (1 .. $Sheet->maxcol) {
-         $cell = $Sheet->Cell_Text($row_c, $_)||"&nbsp;";
-         if ($cell =~ /^(-)?\d*\.\d*(e[-]?\d*)?$/) {
-            $cell = sprintf(("%.".$precision."f"), $cell);
-            $align = " ALIGN=RIGHT";
-         } elsif ($cell =~ /^(-)?[\d ]*$/) {
-            $align = " ALIGN=RIGHT";
-         } else {
-            $align = "";
+      for (1 .. $Book->maxcol) {
+         next if $Book -> Cell_Not ($row_c, $_);
+         $align = "";
+
+         if ($combine = $Book -> Cell_Combine ($row_c, $_)) {
+            my ($r1, $r2, $c1, $c2) = @$combine;
+            $align .= " ROWSPAN=".($r2-$r1+1) if ($r2-$r1);
+            $align .= " COLSPAN=".($c2-$c1+1) if ($c2-$c1);
          }
 
-         my $xf = $xf [$Sheet -> Cell_XF ($row_c, $_)];
+         $cell = $Book -> Cell_Text ($row_c, $_)||"&nbsp;";
+         if ($cell =~ /^(-)?\d*\.\d*(e[-]?\d*)?$/) {
+            $cell = sprintf(("%.".$precision."f"), $cell);
+            $align .= " ALIGN=RIGHT";
+         } elsif ($cell =~ /^(-)?[\d ]*$/) {
+            $align .= " ALIGN=RIGHT";
+         }
+
+         my $xf = $xf [$Book -> Cell_XF ($row_c, $_)];
 
          $text .= "  <TD".$xf->[0].$align.">";
          $text .= $xf->[1] if $xf->[1];
@@ -502,11 +502,21 @@ sub Sheet_to_HTML() {
    $text .= "</TABLE><p>\n</BODY></HTML>";
 1}
 
-
 package herbert;
 
+use OLE::Storage();
+use Unicode::Map();
+use Math::Trig;
+use OLE::Storage::Std;
+
+my $Var;
+
+BEGIN {
+   $Var = OLE::Storage->NewVar();
+}
+
 ## 
-## $Sheet = {
+## $Book = {
 ##    authress  => $str,
 ##    format    => [
 ##       {
@@ -530,10 +540,16 @@ package herbert;
 ## }
 ##
 
-use Math::Trig;
-use OLE::Storage::Std;
-
 sub _member { my $S=shift; my $n=shift if @_; $S->{$n}=shift if @_; $S->{$n}}
+
+sub Buf              { shift->_member("DOC_BUF", @_); }
+sub Doc              { shift->_member("DOC_DOC", @_); }
+sub DocPath          { shift->_member("DOC_DOCPATH", @_); }
+sub Startup          { shift->_member("DOC_STARTUP", @_); }
+sub Var              { shift->_member("DOC_VAR", @_); }
+
+sub biff_version     { shift->_member("BIFF_VERSION", @_); }
+sub biff_type        { shift->_member("BIFF_TYPE", @_); }
 
 sub authress         { shift->_member("DOC_AUTHRESS", @_); }
 sub default_fg_color { shift->_member("DOC_DEFCOL", @_); }
@@ -544,6 +560,7 @@ sub precision        { shift->_member("DOC_PRECISION", @_); }
 sub color            { shift->_member("DOC_COLOR", @_); }
 sub font             { shift->_member("DOC_FONT", @_); }
 sub format           { shift->_member("DOC_FORMAT", @_); }
+sub sst              { shift->_member("DOC_SST", @_); }
 sub xf               { shift->_member("DOC_XF", @_); }
 sub num_of_fonts     { shift->_member("DOC_FONT_NUM", @_); }
 sub num_of_formats   { shift->_member("DOC_FORMAT_NUM", @_); }
@@ -554,24 +571,88 @@ sub Table_Name       { shift->_member("DOC_TABLE0_NAME", @_); }
 sub _table           { shift->_member("DOC_TABLE", @_); }
 sub _num_of_tables   { shift->_member("DOC_TABLE_NUM", @_); }
 
-sub new_document {
-   my @colors = (
-      "#000000", # 00 default, black
-   );
-   my $S = bless ({}, "herbert");
-   $S -> num_of_fonts (-1);
-   $S -> num_of_xfs (-1);
-   $S -> sheet  ({});
-   $S -> font   ([]);
-   $S -> format ([]);
-   $S -> xf     ([]);
-   $S -> _table ([]);
-   $S -> color (\@colors);
-   $S -> maxrow (1);
-   $S -> maxcol (1);
+sub open_document {
+   #my ($proto, $Par) = @_; my $class = ref($proto) || $proto;
+   my ($Par) = @_; my $class = "herbert"; 
+   my $S = bless ({}, $class);
+
+   return 0 unless $Par;
+
+   my @colors = ();
+
+   $S -> Startup      ( $Par->{"STARTUP"} );
+   $S -> DocPath      ( $Par->{"PATH"} );
+   $S -> Buf          ( $Par->{"BUF"} );
+
+   $S -> Doc          ( undef );
+   $S -> Var          ( $Var  );
+   $S -> num_of_fonts ( -1 );
+   $S -> num_of_xfs   ( -1 );
+   $S -> sheet        ( {} );
+   $S -> font         ( [] );
+   $S -> format       ( [] );
+   $S -> xf           ( [] );
+   $S -> sst          ( [] );
+   $S -> _table       ( [] );
+   $S -> color        ( \@colors );
+   $S -> maxrow       ( 1 );
+   $S -> maxcol       ( 1 );
+
+   my $Doc;
+   if ($S->Buf) {
+      $Doc = OLE::Storage->open ($Startup, $Var, $S->DocPath, 2**4, \$S->Buf)
+   } else {
+      $Doc = OLE::Storage->open ($Startup, $Var, $S->DocPath);
+   }
+
+   if ($Doc) {
+      $S -> Doc ($Doc);
+      return 0 unless $S -> _load_book_stream();
+   } else {
+      if (!$S->Buf) {
+         my $buf = "";
+         my $status = 0;
+         { 
+            last unless open (BIFF, $S->DocPath);
+            last unless binmode (BIFF);
+            $status = (read (BIFF, $buf, -s $S->DocPath) == -s $S->DocPath);
+         }
+         close (BIFF);
+         return $S->Startup->error("Read error!") if !$status;
+         $S->Buf($buf);
+      }
+      if (substr($S->Buf, 0, 1) ne "\x09") {
+         # Very probable:
+         return $S->Startup->error("Document is no Excel file!");
+      }
+   }
+
    $S;
 }
+
+sub close_document {
+   my ($S) = @_;
+   $S->Doc->close() if $S->Doc;
+1}
  
+sub _load_book_stream {
+   my ($S, $dir) = @_;
+   $dir = 0 if !$dir;
+
+   if ($S -> Doc) {
+      my %dir = (); 
+      return 0 unless $S->Doc->directory($dir, \%dir, "string");
+      return $S->Startup->error("Not an Excel file!")
+         unless my $pps = $dir{"Book"} || $dir{"Workbook"}
+      ;
+      my $buf = "";
+      return 0 unless $S->Doc->read($pps, \$buf);
+      $S -> Buf ($buf);
+   } else {
+      return $S->Startup->error("Not yet implemented!");
+   }
+1}
+
 ##
 ## Colormap
 ##
@@ -737,7 +818,7 @@ sub add_font {
       $attrib .= "i "       if $_[1] & 2**1;	# italic
       $attrib .= "strike "  if $_[1] & 2**3;	# strike through
       $attrib .= "outline " if $_[1] & 2**4;	# outline
-      $attrib .= "shadow "  if $_[1] & 2**4;	# shadow
+      $attrib .= "shadow "  if $_[1] & 2**5;	# shadow
    }
 
    { # color
@@ -809,6 +890,8 @@ sub _Cell {
 sub Cell_Formula { shift -> _Cell("for", @_) }
 sub Cell_XF      { shift -> _Cell("xf",  @_) }
 sub Cell_Text    { shift -> _Cell("tex", @_) }
+sub Cell_Not     { shift -> _Cell("not", @_) }
+sub Cell_Combine { shift -> _Cell("com", @_) }
 
 sub rows { my ($S)       = @_; [sort {$a<=>$b} keys %{$S -> sheet}]; }
 sub cols { my ($S, $row) = @_; [sort {$a<=>$b} keys %{$S -> sheet -> {$row}}]; }
@@ -837,9 +920,9 @@ sub parse {
 ##
 ## debug: 1,2
 ##
-   my ($S, $buf, $debug_level) = @_;
+   my ($S, $debug_level) = @_;
 
-   my $text = "";
+   my $buf = $S -> Buf;
 
    my ($fsize, $l, $o, $type);
    my ($row, $col, $style, $len, $num);
@@ -867,6 +950,8 @@ sub parse {
 
          $S -> Cell_XF      ($dest_row+1, $dest_col+1, $style);
          $S -> Cell_Formula ($dest_row+1, $dest_col+1, $math);
+      } elsif (0x0009 == $type) { # Doc: New Table
+         $S -> biff_version (2);
       } elsif (0x000e == $type) { # Doc: Default number precision
          # 00 word  precision
          $S -> precision (get_word(\$buf, $o)+1);
@@ -894,14 +979,18 @@ sub parse {
          );
       } elsif (0x0042 == $type) { # Doc: Codepage
          # 00 word  codepage
-         $text .= sprintf("Codepage %d\n", get_word(\$buf, $o));
       } elsif (0x004d == $type) { # Doc: Printer Info
          # printer info
       } elsif (0x005c == $type) { # Doc: Authress
          # authress?
-         # 00 byte  strlen
-         # 01 char* 
-         $S -> authress ( substr($buf, $o+1, get_byte(\$buf, $o)) );
+         # 00 byte  strlen	00 byte strlen
+         # 01 char* 		01 word ?
+         #                      03 char*
+         if ($S->biff_version<8) {
+            $S -> authress ( substr($buf, $o+1, get_byte(\$buf, $o)) );
+         } elsif ($S->biff_version>=8) {
+            $S -> authress ( substr($buf, $o+3, get_byte(\$buf, $o)) );
+         }
       } elsif (0x007d == $type) { # Cell: width of column
          #
          # 00 word  row
@@ -911,21 +1000,22 @@ sub parse {
          #
       } elsif (0x0085 == $type) { # Doc: Table
          #
-         # 00 long  offset    Table starts at this offset
-         # 04 word  unknown
-         # 06 byte  strlen
-         # 07 char*           Name of table
+         # 00 long        offset    Table starts at this offset
+         # 04 word        unknown
+         # 06 (byte|word) strlen
+         # 0x char*       Name of table
          #
          # Can defines several tables, here I just take the first...
-         if (!$Sheet -> Table_Name) {
-            my ($to, $q, $strlen) = get_struct("LWB", \$buf, $o);
-            $Sheet -> Table_Name (substr($buf, $o+7, $strlen));  
-         } else {
-            $Sheet -> Table_Name ("");
+         if (!defined $S -> Table_Name) {
+            if ($S->biff_version<=8) {
+               my ($to, $q, $strlen) = get_struct("LWB", \$buf, $o);
+               $S -> Table_Name (substr($buf, $o+7, $strlen));  
+            } elsif ($S->biff_version>=8) {
+               my ($to, $q, $strlen) = get_struct("LWW", \$buf, $o);
+               $S -> Table_Name (substr($buf, $o+8, $strlen));  
+            }
+         #} else { $S -> Table_Name ("");
          }
-         $text .= sprintf("Table: %s\n",
-            substr($buf, $o+7, get_byte(\$buf, $o+6))
-         );
       } elsif (0x0092 == $type) { # Document: Color Table
          my $num = get_word(\$buf, $o);
          my @colors = get_nlong($num, \$buf, $o+2);
@@ -939,6 +1029,47 @@ sub parse {
          # 08 word    bgcolor
          # 0a word[3] something
          $S -> add_xf (get_struct("WWWWWWWW", \$buf, $o));
+      } elsif (0x00e5 == $type) { # Document: Combinated Cells
+         # 00 word    n
+         # 02 area[n]
+         # area: 4 words: row1, row2, col1, col2
+         my $num = get_word(\$buf, $o);
+         my ($row2, $col2);
+         for (0..$num-1) {
+            ($row, $row2, $col, $col2) = get_nword(4, \$buf, $o+$_*8+2);
+            foreach $r ($row..$row2) {
+               foreach $c ($col..$col2) {
+                  $S -> Cell_Not ($r+1, $c+1, 1);
+               }
+            }
+            $S -> Cell_Not ($row+1, $col+1, 0);
+            $S -> Cell_Combine ($row+1, $col+1, 
+               [$row+1, $row2+1, $col+1, $col2+1]
+            );
+         }
+      } elsif (0x0fc == $type) { # Sheet: Extended String Table
+         # 00 dword   n?
+         # 04 dword   n?
+         # 08 es[0..n]
+         my @counts = (); 
+         my @strings = (); 
+         my $n = get_long(\$buf, $o);
+         my $o = $o+8; 
+         my $c; my $l; my $s;
+         for (0..$n-1) {
+            $l = get_word(\$buf, $o);
+            $c = get_byte(\$buf, $o+2); 
+            push(@counts, $c);
+            push(@strings, substr($buf, $o+3, $l));
+            $o+=(3+$l);
+         }
+         # Don't care about counts...
+         $S -> sst (\@strings);
+      } elsif (0x0fd == $type) { # cell value, string constant/sst
+         ($row, $col, $style) = get_nword(3, \$buf, $o);
+         my $i = get_long(\$buf, $o+6);
+         $S -> Cell_XF    ($row+1, $col+1, $style);
+         $S -> Cell_Text  ($row+1, $col+1, $S->sst->[$i]);
       } elsif (0x0201 == $type) { # Cell: empty
          ($row, $col, $style) = get_nword(3, \$buf, $o);
          $S -> Cell_XF    ($row+1, $col+1, $style);
@@ -951,9 +1082,6 @@ sub parse {
          # 06 double  (Intel format)
          #
          ($row, $col, $style, $float) = get_struct("WWWD", \$buf, $o);
-         $text .= sprintf("Cell %02d:%02d [%02x] $float\n",
-            $row, $col, $style
-         );
          $S -> Cell_XF    ($row+1, $col+1, $style);
          $S -> Cell_Text  ($row+1, $col+1, "$float");
       } elsif (0x0204 == $type) { # Cell: Text
@@ -965,12 +1093,11 @@ sub parse {
          # 08 char* 
          #
          ($row, $col, $style, $len) = get_nword(4, \$buf, $o);
-         $text .= sprintf("Cell %02d:%02d [%02x] %s\n",
-            $row, $col, $style, substr($buf, $o+8, $len)
-         );
          $S -> Cell_XF    ($row+1, $col+1, $style);
          $S -> Cell_Text  ($row+1, $col+1, substr($buf, $o+8, $len));
       } elsif (0x0208 == $type) { # Row
+      } elsif (0x0209 == $type) { # Doc: New Table
+         $S -> biff_version (3);
       } elsif (0x027e == $type) { # Datum
          ($row, $col, $style) = get_nword(3, \$buf, $o);
          $float = "\0\0\0\0".substr($buf, $o+6, 4);
@@ -983,6 +1110,8 @@ sub parse {
          # 01 byte  0x80
          # 02 byte  number?
          # 03 byte  0xff
+      } elsif (0x0409 == $type) { # Doc: New Table
+         $S -> biff_version (4);
       } elsif (0x041e == $type) { # Doc: Formatstring
          #
          # 00 word  format number
@@ -993,8 +1122,15 @@ sub parse {
          $S -> add_format ($num, substr($buf, $o+3, $len));
       } elsif (0x0809 == $type) { # Doc: New Table
          #
-         # 00 byte[8]  unknown
-         #
+         # 00 word  version
+         # 02 word  type
+         # ..
+         my ($v, $t) = get_nword(2, \$buf, $o);
+         if ($v == 0x500) {
+            $S -> biff_version (5);
+         } elsif ($v == 0x600) {
+            $S -> biff_version (8);
+         }
       } else {
          $xdebug = 1;
       }
@@ -1279,7 +1415,7 @@ herbert expenses.xls --noinfo
 
 =head1 DESCRIPTION
 
- Herbert V1.31 (1998/03/10) - ALPHA - converts Excel-Sheets to HTML
+ Herbert V1.38 (1998/03/23) - ALPHA - converts Excel-Sheets to HTML
  usage: Herbert {--option [arg]} file(s)
     --colorframe s  Outer frame will get color #s (9999bf)
     --colorsheet s  Worksheet will get color #s (dfdfdf)
@@ -1301,7 +1437,7 @@ herbert expenses.xls --noinfo
     --src_base   s  Regard this as start directory in relative mode.
     --suffix     s  Output files shall get suffix s (.html)
     --to_stdout     Write output to stdout.
-    --usefonts      Use the font faces defined in excel sheet
+    --usefonts      Use the font faces defined in excel book
 
 =head1 SEE ALSO
 

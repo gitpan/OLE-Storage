@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#$Id: lhalw,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
+#$Id: lhalw,v 1.2 1998/03/23 02:53:47 schwartz Exp $
 #
 # lhalw, Have A Look at Word 6+ Files
 #
@@ -42,8 +42,8 @@ my ($Doc, $Msg, $Startup, $Text, $Unicode, $Var);
 my ($stat_fast, $stat_crypted, $stat_unicode, $stat_verok);
 
 my $PROGNAME = "lhalw";
-my $VERSION=do{my@R=('$Revision: 1.1.1.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
-my $DATE = ('$Date: 1998/02/25 21:13:00 $' =~ / ([^ ]*) /) && $1;
+my $VERSION=do{my@R=('$Revision: 1.2 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $DATE = ('$Date: 1998/03/23 02:53:47 $' =~ / ([^ ]*) /) && $1;
 
 use Getopt::Long;
 use OLE::Storage::Std;
@@ -121,7 +121,7 @@ my %opt = (
 sub handle_stream {
    my ($dp) = @_;
    $Startup->log('processing <STDIN>');
-   $Startup->msg_silent(0);
+   $Startup->msg_silent(1);
    $Startup->msg('processing <STDIN>');
    {
       return _error("Nothing to do!") if -t STDIN;
