@@ -1,6 +1,6 @@
 package OLE::Storage::Std;
 no strict;
-my $VERSION=do{my@R=('$Revision: 0.3.8.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $VERSION=do{my@R=('$Revision: 1.2 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
 
 #
 # I decided to put read_* functions here and not in package Storage::Io
@@ -19,20 +19,16 @@ use Exporter;
                      get_zstr                               
    wstr     nwstr                                           
                      get_zwstr                              
+                     get_rzwstr                              
    real     nreal    get_real    get_nreal     read_real    read_nreal
    double   ndouble  get_double  get_ndouble   read_double  read_ndouble
 );
 
-sub B  () { "C" }
-sub BS () { 1 }
-sub W  () { "v" }
-sub WS () { 2 }
-sub L  () { "V" }
-sub LS () { 4 }
-sub R  () { "f" }
-sub RS () { 4 }
-sub D  () { "d" }
-sub DS () { 8 }
+sub B () { "C" }  sub BS () { 1 }
+sub W () { "v" }  sub WS () { 2 }
+sub L () { "V" }  sub LS () { 4 }
+sub R () { "f" }  sub RS () { 4 }
+sub D () { "d" }  sub DS () { 8 }
 
 ##
 ## EXPORT functions, will be exported by default.
@@ -159,6 +155,11 @@ sub get_zwstr {
    } else {
       substr(${$_[0]}, $_[1],          $_[2]-2);
    }
+}
+sub get_rzwstr {
+   my $tmp = get_zwstr(@_);
+   reverse_unicode Unicode::Map ($tmp);
+   $tmp;
 }
 
 # read_thing ($Io, $offset);

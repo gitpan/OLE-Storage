@@ -1,5 +1,5 @@
-#!/usr/bin/perl
-#$Id: ldat,v 0.3.8.2 1997/10/27 23:19:27 schwartz Exp $
+#!/usr/bin/perl 
+#$Id: ldat,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
 #
 # ldat, Display Authress Title
 #
@@ -28,32 +28,91 @@
 # You can contact me via schwartz@cs.tu-berlin.de
 #
 
-use Getopt::Std;      # imports: getopts
-use OLE::Storage::Std;  # imports: get_long, get_word ...
+my $PROGNAME = "ldat";
+my $VERSION=do{my@R=('$Revision: 1.1.1.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $DATE = ('$Date: 1998/02/25 21:13:00 $' =~ / ([^ ]*) /) && $1;
 
-main: {
-   $|=1; $[=0;
-   getopts ('adhnS');
-   usage() if !@ARGV || $opt_h;
+use Getopt::Long;
+use OLE::Storage::Std;
 
-   require OLE::Storage; 
+my ($Doc, $Startup, $Var);
+my %opt = ();
+
+{
+   $|=1;
+   GetOptions (\%opt,
+      "all",
+      "debug",
+      "xdebug",
+      "no_apps",
+      "slow",
+      "log",
+      "from_stdin|from_0|from0",
+      "help",
+      "recurse|recursive",
+   );
+   usage() if $opt{"help"} || (!@ARGV && !$opt{"from_stdin"});
+
+   require Startup;
+   fail(1) if !($Startup = new Startup);
+
+   require OLE::Storage;
    require OLE::PropertySet;
 
-   $Error = OLE::Storage->NewError(); 	# Error Object
-   $Var   = OLE::Storage->NewVar();	# Var Object
-   $Doc   = undef;			# Document Object
+   $Startup -> init ({
+      SUB_FILES  => \&handle_files,
+      SUB_STREAM => \&handle_stream,
+      PROG_NAME  => $PROGNAME,
+      PROG_VER   => $VERSION,
+      FROM_STDIN => $opt{"from_stdin"},
+      SRCPATH    => ".",
+      RECURSE    => $opt{"recurse"},
+   });
 
-   foreach $file (@ARGV) {
-      #
-      # Open the Document
-      #
-      print "Processing \"$file\":\n";
-      $Doc = OLE::Storage->open($Error, $Var, $file);
-      if (!$Doc) {
-         error(); next;
+   $Startup->allow_logging if $opt{"log"};
+   $Startup->open_log();
+
+   if (!($Var = OLE::Storage->NewVar())) {
+      _error("No Var handle!"); exit 1;
+   }
+   $Doc = undef;
+
+   $Startup->go(@ARGV);
+
+   $Startup->close_log();
+   exit 1;
+}
+
+sub handle_stream {
+   my ($dp) = @_;
+   $Startup->log('processing <STDIN>');
+   $Startup->msg_silent(0);
+   $Startup->msg_nl('processing <STDIN>');
+   {
+      return $Startup->error("Nothing to do!") if -t STDIN;
+      undef $/;
+      return 0 if !($Doc = 
+         OLE::Storage->open($Startup, $Var, "<stdin>", 2**4, \<>)
+      );
+      do_directory(0,0);
+   }
+   $Startup->msg_finish("done");
+1}
+
+sub handle_files {
+   my ($sp, $sf, $dp, $status) = @_;
+   $Startup->msg_reset();
+
+   $Startup->log("processing $sp/$sf");
+   $Startup->msg_nl("Processing \"$sf\"");
+
+   return error ("File \"$sf\" doesn't exist!") if !$status;
+   return 1 if $status < 0;
+   {
+      if (!($Doc = OLE::Storage->open($Startup, $Var, "$sp/$sf"))) {
+         $Startup -> log ($Startup->err_str, "!");
+         return 0;
       }
-      print "\n";
-
       #
       # Start examination at Root Property Set (pps handle is always 0) 
       # with indent level 0 (indent level is just a variable, that enables 
@@ -65,26 +124,54 @@ main: {
       # Close the Document
       #
       $Doc->close();
-      print "\n";
    }
+   $Startup->msg_finish("done");
+1}
 
+sub _error {
+   $Startup -> msg_error(@_) if defined $Startup;
+}
+
+sub fail {
+   my ($num) = @_;
+   print "Strange error #$num! Exiting!\n"; exit 0;
+}
+
+sub basename {
+#
+# $basename = basename($filepath)
+#
+   (substr($_[0], rindex($_[0],'/')+1) =~ /(^[^.]*)/) && $1;
+}
+
+sub usage {
+   _print_usage (
+      "$PROGNAME V$VERSION ($DATE)\n"
+      ."usage: $PROGNAME {--option} file(s)",
+      [
+        "all         Show even 'empty' objects.",
+        "debug       Give more detailed information about property sets.",
+        "no_apps     Do not look at special application data.",
+        "help        Shows this help.",
+        "slow        (For debugging purposes)",
+        "log         Write a logfile.",
+        "from_stdin  Take input from stdin.",
+        "recurse     Operate recursively on directories.",
+      ]
+   );
    exit 0;
+}
+
+sub _print_usage {
+   my ($header, $bodylistR, $footer) = @_;
+   print "$header\n" if $header;
+   print map "   --$_\n", sort { lc($a) cmp lc($b) } @$bodylistR;
+   print "$footer\n" if $footer;
 }
 
 ##
 ## main things
 ##
-
-sub usage {
-   print "usage: ldat [-a] [-d] {document}\n".
-     "Shows some information about the objects stored in Ole/Com documents.\n".
-     "-a    All, show even \"empty\" objects\n".
-     "-d    Debug, some more debug information about special properties\n".
-     "-n    No apps, do not look at special application data\n".
-     "-h    Help, shows this help\n";
-     "-S    (Slow. For debugging purposes)\n";
-   exit 0;
-}
 
 sub do_directory {
    # !recursive!
@@ -121,7 +208,7 @@ sub do_directory {
    # automatically.
    #
    @list=(); if ($pps = $dir{"\01CompObj"}) {
-      if (tie my %P, OLE::PropertySet, $Error, $Var, $pps, $Doc, "string") {
+      if (tie my %P, OLE::PropertySet, $Startup, $Var, $pps, $Doc, "string") {
          @list = ($P{0}, $P{2})
    }}
    local($type1, $type2) = @list;
@@ -132,7 +219,7 @@ sub do_directory {
    # Example with tie. Apply method string() by hand.
    #
    @list=(); if ($pps = $dir{"\05DocumentSummaryInformation"}) {
-      if (tie my %P, OLE::PropertySet, $Error, $Var, $pps, $Doc) {
+      if (tie my %P, OLE::PropertySet, $Startup, $Var, $pps, $Doc) {
          @list = string {$P{15}};
    }}
    local ( $org ) = @list;
@@ -143,7 +230,7 @@ sub do_directory {
    # Example without tie. (don't rely on line number of debug information!)
    #
    @list=(); if ($pps = $dir{"\05SummaryInformation"}) {
-      if (my $P = load OLE::PropertySet ($Error, $Var, $pps, $Doc)) {
+      if (my $P = load OLE::PropertySet ($Startup, $Var, $pps, $Doc)) {
          @list = string {$P->property(2,4,7,8,9,18,12,13)};
    }}
    local ($title, $authress, $template, $lastauth, $revnum, $appname, 
@@ -152,10 +239,10 @@ sub do_directory {
 
 
    # --- Word, Excel printer info ------------------------------------------
-   if (!$opt_n) {
-      local ( @printer);
+   local (@printer);
+   if (!$opt{"no_apps"}) {
       read_wordinfo()          if $pps = $dir{"WordDocument"};
-      if ($opt_S) {
+      if ($opt{"slow"}) {
          read_excelinfo_slow() if $pps = $dir{"Book"};
       } else {
          read_excelinfo()      if $pps = $dir{"Book"};
@@ -163,7 +250,7 @@ sub do_directory {
    }
 
    # --- "Debug". Shows how to read all properties -------------------------
-   if ($opt_d) {
+   if ($opt{"debug"}) {
       foreach $pps (values %dir) {
          debug_property($pps);
       }
@@ -171,12 +258,12 @@ sub do_directory {
 
    # --- Print information about current object ----------------------------
    show: {
-      if (!$opt_a) {
+      if (!$opt{"all"}) {
          last if !$type1 && !($title || $authress || $appname);
       }
-      &print_compobj();
-      &print_suminfo();
-      &print_printerinfo();
+      print_compobj();
+      print_suminfo();
+      print_printerinfo();
    }
 
    #
@@ -271,10 +358,27 @@ sub read_excelinfo {
    while ($o<$fsize) {
       $type = get_word(\$buf, $o);
       $l = get_word(\$buf, $o+2);
+      if ($opt{"xdebug"}) {
+         printf("type = %04x (o=%06x, l=%04x):\n", $type, $o, $l);
+         my @list = (); my $str = substr($buf, $o+4, $l);
+         while($str) {
+            push(@list, substr($str, 0, 16)); 
+            substr($str, 0, 16)="";
+         }
+         for (@list) {
+            my $s = "   "; my $l = length($_); next if !$l;
+            $s .= sprintf("%02x " x $l, unpack("C$l", $_));
+            $s .= " " x (55 - length($s));
+            s/[^0-9a-zA-Z äöüÄÖÜ\!\"\§\$\%\&\/\(\)\]]/./g;
+            $s .= $_;
+            print "$s\n";
+         }
+      }
       if ($type == 0x4d) {
          $infobuf = substr($buf, $o+4, $l);
-         last;
-      }
+         last unless $opt{"xdebug"};
+      } 
+
       $o += (4+$l);
    }
    @printer = ($infobuf =~ /^..([^\00]*)\00/ );
@@ -324,7 +428,7 @@ sub debug_property {
    debug_head($Doc->name($pps)->string());
 
    # Tie the property set to %PSet:
-   if ($PSet = tie %PSet, OLE::PropertySet, $Error, $Var, $pps, $Doc) {
+   if ($PSet = tie %PSet, OLE::PropertySet, $Startup, $Var, $pps, $Doc) {
 
       # Loop over all properties:
       for (sort {$a <=> $b} keys %PSet) {
@@ -404,13 +508,7 @@ sub debug_body {
 # ------------------------------ Utils -------------------------------------
 #
 
-sub error {
-   printf "Error! %s\n\n", $Error->string();
-}
-
-sub _error { 
-   $Error->error(@_) if defined $Error;
-}
+sub error { printf "Error! %s\n\n", $Startup->error() }
 
 sub fill {
 #
@@ -438,39 +536,39 @@ ldat - Display Authress Title
 
 =head1 SYNOPSIS
 
-ldat [C<-a>] [C<-d>] [C<-n>] document
+ ldat V0.387 (1998/02/12)
+ usage: ldat {--option} file(s)
+    --all         Show even 'empty' objects.
+    --debug       Give more detailed information about property sets.
+    --from_stdin  Take input from stdin.
+    --help        Shows this help.
+    --log         Write a logfile.
+    --no_apps     Do not look at special application data.
+    --recurse     Operate recursively on directories.
+    --slow        (For debugging purposes)
 
 =head1 DESCRIPTION
 
 Shows some information about the Property Sets stored in MS Windows
-Structured Storage documents.
-
-Options are:
+Structured Storage documents. Options are:
 
 =over 4
 
-=item C<-a> all
+=item C<--all>
 
-This shows also those objects, that consist only out of directories and
-contain no stream data.
+This shows also those entries consisting out of directories only and
+containing no data stream at all.
 
-=item C<-d> debug
+=item C<--debug>
 
-This shows additionally a list of all property set entries. It is e.g.
-useful, if you want to see, which type some property has.
+This shows additionally a list of all property set entries. It is quite
+useful if you want to see, which type properties have.
 
-=item C<-h> help
+=item C<--no_apps> 
 
-Shows a little help text.
-
-=item C<-n> no apps
-
-Do not look at special application data. Useful, if you want to have a quick
-glance, but have big document files.
-
-=item C<-S> Slow.
-
-No functional use. Just for debugging purposes.
+Do not look at special application data. Normally ldat looks for some
+information in Word documents and Excel books, but this costs time. This
+switch is useful, if you want to glance quickly and have big document files.
 
 =back
 

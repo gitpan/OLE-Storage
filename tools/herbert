@@ -1,0 +1,1074 @@
+#!/usr/bin/perl
+#$Id: herbert,v 1.19 1998/03/03 08:15:00 schwartz Exp $
+#
+# Herbert - Converts a simple Excel document to some kind of HTML.
+#
+# Very early and alpha version. Lots of Excel features are not supported.
+#
+# See also usage() of this file. Latest version can be found at:
+#
+#    http://wwwwbs.cs.tu-berlin.de/~schwartz/perl/
+#
+# Copyright (C) 1998 Martin Schwartz <schwartz@cs.tu-berlin.de>
+#
+#    This program is free software; you can redistribute it and/or modify
+#    it under the terms of the GNU General Public License as published by
+#    the Free Software Foundation; either version 2 of the License, or
+#    (at your option) any later version.
+#
+#    This program is distributed in the hope that it will be useful,
+#    but WITHOUT ANY WARRANTY; without even the implied warranty of
+#    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#    GNU General Public License for more details.
+#
+#    You should have received a copy of the GNU General Public License
+#    along with this program; if not, you should find it at:
+#
+#    http://wwwwbs.cs.tu-berlin.de/~schwartz/pmh/COPYING
+#
+# You can contact me via schwartz@cs.tu-berlin.de
+#
+
+my $PROGNAME = "Herbert";
+my $VERSION=do{my@R=('$Revision: 1.19 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $DATE = ('$Date: 1998/03/03 08:15:00 $' =~ / ([^ ]*) /) && $1;
+
+no strict; $^W=0;
+use Getopt::Long;
+use OLE::Storage::Std;
+
+my ($Doc, $Startup, $Var, $text);
+my ($Sheet);
+
+my %opt = (
+   "dirmode"    => "0700",
+   "filemode"   => "0600",
+   "colorframe" => "9999bf",
+   "colorsheet" => "cfcfcf",
+   "suffix"     => ".html",
+);
+
+main: {
+   $|=1;
+   GetOptions (\%opt,
+      "xdebug", "xxdebug",
+      "herbert",
+      "nocolor",
+      "nocellcolor",
+      "noframe",
+      "nogrid",
+      "noinfo",
+      "colorframe=s",
+      "colorsheet=s",
+      "nopack",
+      "overwrite",
+      "log",
+      "src_base|source_base|source_dir=s",
+      "dest_base|destbase|destdir=s",
+      "from_stdin|from_0|from0",
+      "to_stdout|to_1|to1",
+      "filemode=s",
+      "dirmode=s",
+      "help",
+      "recurse|recursive",
+      "relative",
+      "suffix=s",   
+   );
+   herbert() if $opt{"herbert"};
+   usage() if !@ARGV || $opt{"help"};
+
+   require OLE::Storage;
+   require Unicode::Map;
+   require Startup;
+
+   fail(1) unless $Startup = new Startup;
+   fail(2) unless $Var = OLE::Storage->NewVar();
+
+   $Startup -> init ({
+      SUB_FILES  => \&handle_files,
+      SUB_STREAM => \&handle_stream,
+      PROG_NAME  => $PROGNAME,
+      PROG_VER   => $VERSION,
+      FROM_STDIN => $opt{"from_stdin"},
+      SRCPATH    => $opt{"src_base"},
+      DESTPATH   => $opt{"dest_base"},
+      RECURSE    => $opt{"recurse"},
+      RELATIVE   => $opt{"relative"},
+      FILEMODE   => $opt{"filemode"},
+      DIRMODE    => $opt{"dirmode"},
+   });
+
+   $Startup->msg_silent(1) if $opt{"to_stdout"};
+   $Startup->allow_logging if $opt{"log"};
+   $Startup->open_log();
+   $Startup->log('s/'.$opt{"search"}.'/'.$opt{"replace"}.'/'.$opt{"mode"});
+   if ($opt{"to_stdout"}) {
+      $Startup->log("writing to STDOUT");
+   } elsif ($opt{"suffix"}) {
+      $Startup->log("output files get suffix \"".$opt{"suffix"}."\"");
+   }
+
+   $Startup->go(@ARGV);
+
+   $Startup->close_log();
+   exit 1;
+}
+
+sub handle_stream {
+   my ($dp) = @_;
+   $Startup->log("processing <STDIN>");
+   {
+      return $Startup->error("Nothing to do!") if -t STDIN;
+      undef $/;
+      return 0 if !($Doc = 
+         OLE::Storage->open($Startup, $Var, "<stdin>", 2**4, \<>)
+      );
+   }
+   return 0 if !main_work(0, 0, "$dp/stdin");
+1}
+
+sub handle_files {
+   my ($sp, $sf, $dp, $status) = @_;
+   $Startup->msg_reset();
+
+   $Startup->log("processing $sp/$sf");
+   $Startup->msg("Processing \"$sf\"");
+
+   return $Startup->error ("File \"$sf\" doesn't exist!") if !$status;
+   return 1 if $status < 0;
+   {
+      return 0 unless $Doc = OLE::Storage->open($Startup, $Var, "$sp/$sf");
+      $status = main_work($sp, $sf, $dp);
+      $Doc->close($infile);
+   }
+   return 0 if !$status;
+   $Startup->msg_finish("done");
+1}
+
+sub main_work {
+   my ($sp, $sf, $dp) = @_;
+
+   $dp = "$dp/". basename($sf) . $opt{"suffix"};
+
+   if (!$opt{"overwrite"}) {
+      return $Startup->error("File \"$dp\" already exists!") if -e $dp;
+   }
+
+   return $Startup->error("I don't understand this file!") 
+      unless parse_sheet()
+   ;
+   Sheet_to_HTML($sf);
+
+   if ($opt{"to_stdout"}) {
+      return print STDOUT "$text\n";
+   } else {
+      return $Startup->error("Cannot open output file \"$dp\"")
+         if !open OUTFILE, ">$dp"
+      ;
+      my $status = print OUTFILE "$text\n";
+      close OUTFILE;
+      return $Startup->error("Write error") if !$status;
+      return 1;
+   }
+}
+
+sub fail {
+   my ($num) = @_;
+   print "Strange error #$num! Exiting!\n"; exit 0;
+}
+
+sub basename {
+#
+# $basename = basename($filepath)
+#
+   (substr($_[0], rindex($_[0],'/')+1) =~ /(^[^.]*)/) && $1;
+}
+
+sub usage {
+   _print_usage (
+      "$PROGNAME V$VERSION ($DATE) - ALPHA - converts Excel-Sheets to HTML\n".
+      "usage: $PROGNAME {--option [arg]} file(s)",
+      [
+        "noframe       Spreadsheet will not get an outer frame.",
+        "nogrid        Spreadsheet will have no grid.",
+        "nocolor       No colors will be used.",
+        "nocellcolor   Cell text gets no special color.",
+        "nopack        Empty leading lines will be displayed.",
+        "noinfo        Do not include info about original document.",
+        "colorframe s  Outer frame will get color #s (".$opt{"colorframe"}.")",
+        "colorsheet s  Worksheet will get color #s (".$opt{"colorsheet"}.")",
+        "herbert       Very short info about Herbert Baum.",
+
+        "log           Write a logfile.",
+        "src_base   s  Regard this as start directory in relative mode.",
+        "dest_base  s  Store output files based at this directory.",
+        "from_stdin    Take input from stdin.",
+        "to_stdout     Write output to stdout.",
+        "filemode   s  New files get access mode s (".$opt{"filemode"}.")",
+        "dirmode    s  New directories get access mode s (".$opt{"dirmode"}.")",
+        "overwrite     Overwrite existing files.",
+        "recurse       Operate recursively on directories.",
+        "relative      Store files relatively to destdir when in recurse mode.",
+        "suffix     s  Output files shall get suffix s (".$opt{"suffix"}.")", 
+      ]
+   );
+   exit 0;
+}
+
+sub herbert {
+print"
+ABOUT Herbert
+
+This program is dedicated to Herbert Baum and the anti Nazi group with him. 
+Most of the group was killed 1942 after attacking a propaganda exhibition.
+1984 students tried to name the main building of TU Berlin after him.
+
+If german language is ok for you, just have a look at:
+
+http://www.cs.tu-berlin.de/studis/asta/unikur/u34/her-baum.html
+
+";
+   exit 0;
+}
+
+sub _print_usage {
+   my ($header, $bodylistR, $footer) = @_;
+   print "$header\n" if $header;
+   print map "   --$_\n", sort { lc($a) cmp lc($b) } @$bodylistR;
+   print "$footer\n" if $footer;
+}
+
+sub parse_sheet {
+#
+# Excel (Biff5) style, read some printer info 
+#
+# Biff is build as a long chain of data chunks. To find a chunk one has to 
+# go hand over hand through the file. Printer info chunks have the type 0x4d. 
+#
+   $Sheet = herbert::new_document();
+
+   my %dir = (); 
+   return 0 unless $Doc->directory(0, \%dir, "string");
+
+   return $Startup->error("Not an Excel file!") unless my $pps=$dir{"Book"};
+
+   my ($buf);
+   return 0 unless $Doc->read($pps, \$buf);
+
+   my $allow_color = $opt{"nocolor"}&&255 | $opt{"nocellcolor"}&&1;
+   my $debug_level = $opt{"xdebug"}&&1 || $opt{"xxdebug"}&&2;
+   return 0 unless $Sheet -> parse ($buf, $allow_color, $debug_level);
+1}
+
+sub Sheet_to_HTML() {
+   my ($orig_file) = @_;
+
+   $text = 
+      "<HTML><HEAD>\n".
+      "<META HTTP-EQUIV=\"Content-Type\" CONTENT=\"text/html\">\n".
+      "<META NAME=\"GENERATOR\" CONTENT=\"$PROGNAME $VERSION ($DATE)\">\n"
+   ;
+   $text .= "<TITLE>$orig_file</TITLE>\n" unless $opt{"noinfo"};
+   $text .= "</HEAD><BODY>&nbsp;<P>\n\n";
+
+   $text .= 
+     "<!-- $PROGNAME is shipped with the perl 5 module OLE::Storage -->\n".
+     "<!-- Source at: http://wwwwbs.cs.tu-berlin.de/~schwartz/perl/ -->\n\n"
+   ;
+   unless ($opt{"noinfo"}) {
+      my $aut = $Sheet->authress;
+      $text .= "<!-- Filename of original document: \"$orig_file\" -->\n";
+      $text .= "<!-- Authress of original document: \"$aut\" -->\n" if $aut;
+      $text .= "\n";
+   }
+
+   my $title = $Sheet -> Table_Name || "";
+   $text .= "<H3>$title</H3>\n" if $title;
+
+   my $colorsheet = ""; 
+   my $colorframe = "";
+
+   $colorsheet = " BGCOLOR=#".$opt{"colorsheet"} unless $opt{"nocolor"};
+   $colorframe = " BGCOLOR=#".$opt{"colorframe"} unless $opt{"nocolor"};
+
+   my $gridX = "A"; my $gridY="1";
+   my $grid = $opt{"nogrid"} ? "" : " BORDER=1";
+   
+   $text .= "<TABLE$grid$colorsheet>\n";
+   unless ($opt{"noframe"}) {
+      $text .= "<TR$colorframe><TD>&nbsp;</TD>\n";
+      for (1 .. $Sheet->maxcol) {
+         $text .= "  <TD><B>".($gridX++)."</B></TD>\n";
+      }
+      $text .= "</TR>\n";
+   }
+   my $precision = $Sheet -> precision;
+   my $align = "";
+   my $row_c = 1; my $row = 0;
+   foreach $row_c (@{$Sheet->rows}) {
+      if ($row || $opt{"nopack"}) {
+         for (2 .. $row_c-$row) {
+            $text .= "<TR>\n";
+            $text .= "  <TD$colorframe><B>".($gridY++)."</B></TD>\n" 
+               unless $opt{"noframe"};
+            for (1 .. $Sheet->maxcol) {
+               $text .= "  <TD>&nbsp;</TD>\n";
+            }
+            $text .= "</TR>\n";
+         }
+      } else {
+         for (2..$row_c) { $gridY++; }
+      }
+     
+      $row = $row_c;
+      $text .= "<TR>\n"; my $cell; my $font;
+      $text .= "  <TD$colorframe><B>".($gridY++)."</B></TD>\n" 
+         unless $opt{"noframe"}
+      ;
+      for (1 .. $Sheet->maxcol) {
+         $cell = $Sheet->Cell_Text($row_c, $_)||"&nbsp;";
+         if ($cell =~ /^(-)?\d*\.\d*(e[-]?\d*)?$/) {
+            $cell = sprintf(("%.".$precision."f"), $cell);
+            $align = " align=right";
+         } elsif ($cell =~ /^(-)?[\d ]*$/) {
+            $align = " align=right";
+         } else {
+            $align = "";
+         }
+         $font = $Sheet -> Cell_Font($row_c, $_);
+         $text .= "  <TD$align>";
+         $text .= "<".$font->[0].">" if $font->[0];
+         $text .= $font->[1]. $cell. $font->[2];
+         $text .= $font->[3] if $font->[0];
+         $text .= "</TD>\n";
+      }
+      $text .= "</TR>\n";
+   }
+   $text .= 
+      "</TABLE><p>\n".
+      "</BODY></HTML>"
+   ;
+1}
+
+
+package herbert;
+
+## 
+## $Sheet = {
+##    authress  => $str,
+##    format    => {
+##    },
+##    font      => {
+##    },
+##    precision =>
+##    sheet     => {
+##       row e {1..maxrow} => {
+##          col e {1..maxcol} => {
+##             "text"    => $text,
+##             "formula" => $formula,
+##          }
+##       }
+##    },
+## }
+##
+
+use Math::Trig;
+use OLE::Storage::Std;
+
+sub _member { my $S=shift; my $n=shift if @_; $S->{$n}=shift if @_; $S->{$n}}
+
+sub authress        { shift->_member("DOC_AUTHRESS", @_); }
+sub default_color   { shift->_member("DOC_DEFCOL", @_); }
+sub font            { shift->_member("DOC_FONT", @_); }
+sub format          { shift->_member("DOC_FORMAT", @_); }
+sub maxrow          { shift->_member("DOC_MAXROW", @_); }
+sub maxcol          { shift->_member("DOC_MAXCOL", @_); }
+sub precision       { shift->_member("DOC_PRECISION", @_); }
+sub sheet           { shift->_member("DOC_SHEET0", @_); }
+sub Table_Name      { shift->_member("DOC_TABLE0_NAME", @_); }
+sub _num_of_fonts   { shift->_member("DOC_FONT_NUM", @_); }
+sub _num_of_formats { shift->_member("DOC_FORMAT_NUM", @_); }
+sub _table          { shift->_member("DOC_TABLE", @_); }
+sub _num_of_tables  { shift->_member("DOC_TABLE_NUM", @_); }
+sub _color          { shift->_member("DOC_COLOR", @_); }
+
+sub load_colormap {
+   my ($S, $colorA) = @_;
+   $S->_color($colorA);
+   my $defcol = $S->default_color;
+   my ($tmp, $color, $font_open, $font_close);
+   # printf "Colormap\n";
+   for (0..$#{$S->font}) {
+      $color = $S->font->[$_]->[4];
+      next if $color==$defcol;
+
+      $font_open = $S->font->[$_]->[0];
+      if ($font_open) {
+         $font_open .= " ";
+      } else {
+         $font_open = "FONT ";
+      }
+      $font_open .= sprintf("COLOR=#%06x", $S->_color->[$color]);
+      $S->font->[$_]->[0] = $font_open;
+      $S->font->[$_]->[3] = "</FONT>";
+   }
+}
+
+# define default colors
+#
+# document methods 
+#
+
+sub new_document {
+   my @colors = (
+      "#000000", # 00 default, black
+   );
+   my $S = bless ({}, "herbert");
+   $S -> _num_of_fonts (-1);
+   $S -> _num_of_formats (-1);
+   $S -> sheet  ({});
+   $S -> font   ([]);
+   $S -> format ([]);
+   $S -> _table ([]);
+   $S -> _color (\@colors);
+   $S -> maxrow (1);
+   $S -> maxcol (1);
+   $S;
+}
+
+sub calculate {
+#
+# updates cell ($row, $col)
+#
+   my ($S, $dest_row, $dest_col) = @_;
+   my $math = $S->Cell_Formula($dest_row, $dest_col);
+   return 0 if !$math;
+
+   my $o = 0; my $l = length($math);
+   my ($col, $col2, $c, $c2, $float, $n, $row, $row2, $tok);
+   my @stack=(); my $error=0;
+   my ($val, $val2);
+
+   while ($o < $l) {
+      
+      $tok = get_byte(\$math, \$o);
+      if ($tok == 0x01) {
+         ($row, $col) = get_nword(2, \$math, \$o);
+         $val = $S-> Cell_Text($row+1, $col+1);
+      } elsif ($tok == 0x03) {
+         $val = pop(@stack); $val = pop(@stack) + $val;
+      } elsif ($tok == 0x04) {
+         $val = pop(@stack); $val = pop(@stack) - $val;
+      } elsif ($tok == 0x05) {
+         $val = pop(@stack); $val = pop(@stack) * $val;
+      } elsif ($tok == 0x06) {
+         $val = pop(@stack); 
+         if ($val == 0) { 
+            @stack=(); $error="Division by zero"; last;
+         }
+         $val = pop(@stack) / $val;
+      } elsif ($tok == 0x0b) {
+         $val = pop(@stack); $val2 = pop(@stack);
+         if ($val eq $val2) {
+            $val = 1;
+         } elsif ("$val" eq "$val2") {
+            $val = 1;
+         } else {
+            $val = 0;
+         }
+      } elsif ($tok == 0x17) {
+         $val = get_str(\$math, \$o, get_byte(\$math, \$o));
+      } elsif ($tok == 0x19) {
+         # ??
+         $o+=3; next;
+      } elsif ($tok == 0x1c) {
+         @stack=(); $error="dummy"; last;
+      } elsif ($tok == 0x1f) {
+         $val = get_double(\$math, \$o);
+      } elsif ($tok == 0x24) {
+         ($row, $c, $col) = get_nbyte(3, \$math, \$o);
+         if ($c != 0xc0) {
+            @stack=(); $error=2; last;
+         }
+         $val = $S -> Cell_Text($row+1, $col+1);
+      } elsif ($tok == 0x25) {
+         ($row, $c, $row2, $c2, $col, $col2) = get_nbyte(6, \$math, \$o);
+         my @list=();
+         if ($c!=0xc0 || $c2!=0xc0) {
+            @stack=(); $error=3; last;
+         }
+         foreach $r ($row..$row2) {
+            foreach $c ($col..$col2) {
+               push(@list, $S -> Cell_Text($r+1, $c+1));
+            }
+         }
+         $val = \@list;
+      } elsif ($tok == 0x41) {
+         $c = get_word(\$math, \$o);
+         if ($c==0x0f) { 		# sin
+            $val=sin(pop(@stack));
+         } elsif ($c==0x10) { 	# cos
+            $val=cos(pop(@stack));
+         } elsif ($c==0x11) { 	# tan
+            $val=tan(pop(@stack));
+         } elsif ($c==0x12) { 	# arctan
+            $val=atan(pop(@stack));
+         } elsif ($c==0x13) { 	# pi
+            $val=pi;
+         } elsif ($c==0x14) { 	# wurzel
+            $val=sqrt(pop(@stack));
+         } elsif ($c==0x15) { 	# exp
+            $val=exp(pop(@stack));
+         } elsif ($c==0x16) { 	# ln
+            $val=log(pop(@stack));
+         } elsif ($c==0x18) { 	# abs
+            $val=abs(pop(@stack));
+         } elsif ($c==0x19) { 	# ganzzahl
+            $val=int(pop(@stack));
+         } elsif ($c==0x1a) { 	# vorzeichen
+            $val=pop(@stack); $val>=0 ? 0 : -1; 
+         } elsif ($c==0x1b) { 	# runden
+            $val=pop(@stack); $val2=pop(@stack);
+            $val = sprintf(("%.".$val."f"), $val2);
+         } elsif ($c==0x26) { 	# nicht
+            $val=pop(@stack); $val = $val ? 0 : 1; 
+         } elsif ($c==0x27) { 	# rest
+            $val=pop(@stack); $val2=pop(@stack);
+            $val = $val2 - int($val2/$val) * $val;
+         } elsif ($c==0x3f) { 	# zufallszahl
+            $val=rand(); 
+         #} elsif ($c==0x61) { 	# arctan2
+         } elsif ($c==0x62) { 	# arcsin
+            $val=asin(pop(@stack));
+         } elsif ($c==0x63) { 	# arccos
+            $val=acos(pop(@stack));
+         } elsif ($c==0xb8) { 	# fakult‰t
+            $val2=pop(@stack); $val=1;
+            for(1..$val2) { $val *= $_; }
+         } elsif ($c==0xd4) { 	# aufrunden
+            $val=pop(@stack); $val2=pop(@stack);
+            $val2 += 0.49/10**$val;
+            $val = sprintf(("%.".$val."f"), $val2);
+         } elsif ($c==0xd5) { 	# abrunden
+            $val=pop(@stack); $val2=pop(@stack);
+            $val2 -= 0.49/10**$val;
+            $val = sprintf(("%.".$val."f"), $val2);
+         } elsif ($c==0xe5) { 	# sinhyp
+            $val=sinh(pop(@stack));
+         } elsif ($c==0xe6) { 	# coshyp
+            $val=cosh(pop(@stack));
+         } elsif ($c==0xe7) { 	# tanhyp
+            $val=tanh(pop(@stack));
+         } elsif ($c==0xe8) { 	# arcsinhyp
+            $val=asinh(pop(@stack));
+         } elsif ($c==0xe9) { 	# arccoshyp
+            $val=acosh(pop(@stack));
+         } elsif ($c==0xea) { 	# arctanhyp
+            $val=atanh(pop(@stack));
+         } elsif ($c==0x117) { 	# gerade
+            $val=int(pop(@stack));
+            $val += ($val %2);
+         } elsif ($c==0x11d) { 	# untergrenze
+            $val=pop(@stack); $val2=pop(@stack);
+            $val = int($val2/$val)*$val;
+         } elsif ($c==0x120) { 	# obergrenze
+            $val=pop(@stack); $val2=pop(@stack);
+            $val = (int($val2/$val)+1)*$val;
+         } elsif ($c==0x12a) { 	# ungerade
+            $val=int(pop(@stack));
+            $val += 1 - ($val %2);
+         } elsif ($c==0x151) { 	# potenz
+            $val=pop(@stack); $val2=pop(@stack);
+            $val = $val2**$val;
+         } elsif ($c==0x156) { 	# deg
+            $val=deg2rad(pop(@stack));
+         } elsif ($c==0x157) { 	# rad
+            $val=rad2deg(pop(@stack));
+         } else { 
+            @stack=(); $error=sprintf("41: %04x", $c); last;
+         }
+      } elsif ($tok == 0x42) {
+         $n = get_byte(\$math, \$o);
+         $c = get_word(\$math, \$o);
+         if ($c==0x01) {	# wenn
+            if ($n!=3) {
+               @stack=(); $error=5; last;
+            }
+            $val=pop(@stack); $val2=pop(@stack); $val3=pop(@stack);
+            if ($val3) {
+               $val = $val2;
+            } else {
+               $val = $val;
+            }
+         } else {
+            my @list = ();
+            for (1..$n) {
+               $val = pop(@stack);
+               push (@list, ref($val) ? @$val : $val);
+            }
+            $val = undef;
+            for (@list) {
+               if ($c==0x04) {		# summe
+                  if (!defined $val) { $val = $_ } else { $val += $_; }
+               } elsif ($c==0x24) {      	# und
+                  $val = $_ ? 1 : 0; last if !$val;
+               } elsif ($c==0x25) {      	# und
+                  $val = $_ ? 1 : 0; last if $val;
+               } elsif ($c==0xb7) {	# produkt
+                  if (!defined $val) {$val=$_} else { $val *= $_; }
+               } elsif ($c==0x141) {	# quadratesumme
+                  if (!defined $val) {$val=$_**2} else { $val += $_**2; }
+               } else {
+                  @stack=(); $error=sprintf("42: %04x", $c); last;
+               }
+            }
+         }
+      } elsif ($tok == 0x44) {
+         ($row, $c, $col) = get_nbyte(3, \$math, \$o);
+         if ($c != 0xc0) {
+            @stack=(); last;
+         }
+         $val = $S -> Cell_Text($row+1, $col+1);
+      } else {
+         @stack=(); $error=sprintf("token: %02x", $tok); last;
+      }
+      push(@stack, $val);
+   }
+   push (@stack, "") if (!$err && !@stack);
+   if (@stack) {
+      $val = $stack[0];
+      $val = ' 0' if !$val;
+   } else {
+      $val = "#ERR ($error)";
+   }
+   $S -> Cell_Text ($dest_row, $dest_col, "$val");
+}
+
+sub add_format {
+#
+# $S,
+# 0 font#, 1 format#, 2 unkown, 3 align, 4 unknown, 5, 6, 7 unknown
+#
+   my $S = shift;
+   my $num = $S->_num_of_formats;
+   $num++;
+   $S->_num_of_formats($num);
+   $S->format->[$num] = [$_[0], $_[1]];
+   #printf("Adding format %02x: font#=%02x format#=%02x\n", $num, $_[0], $_[1]);
+}
+
+sub add_font {
+#
+# $S, 
+# 0 $height, 1 $attrib, 2 $color, 3 $bold, 4 $super, 5 $underline, 6 $family, 
+# 7 $charset, 8 $unknown, 9 $name
+#
+   my $S = shift;
+   my $num = $S->_num_of_fonts;
+   $num++;
+   $num++ if $num==5;
+
+   $S->_num_of_fonts($num);
+
+   my $open = ""; my $close = "";
+   my $font_open = ""; my $font_close="";
+
+   { # height
+      my $height = $_[0] / 20;
+      my $size = undef;
+      if ($height <= 7) {
+         $size = "-2";
+      } elsif ($height <= 10) {
+         $size = "-1";
+      } elsif ($height <= 12) {
+         # 3
+      } elsif ($height <= 18) {
+         $size = "+1";
+      } elsif ($height <= 24) {
+         $size = "+2";
+      } elsif ($height <= 32) {
+         $size = "+3";
+      } else {
+         $size = "+4";
+      }
+      $font_open .= " SIZE=$size" if defined $size;
+   }
+
+   { # attrib
+      if ($_[1] & 2**1) { $open .= "<I>"; $close .= "</I>"; }
+      if ($_[1] & 2**3) { } # struck_out
+      if ($_[1] & 2**4) { } # outline
+      if ($_[1] & 2**5) { } # shadow
+   }
+
+   # color
+   # must be handled after loading the color-map...
+
+   { # bold
+      if ($_[3] >= 600) { $open .= "<B>"; $close .= "</B>"; }
+   }
+
+   { # super
+      if ($_[4] == 1) { $open .= "<SUP>"; $close .= "</SUP>"; }
+      if ($_[4] == 2) { $open .= "<SUB>"; $close .= "</SUB>"; }
+   }
+  
+   { # underline
+      if ($_[5] & 3) { $open .= "<U>"; $close .= "</U>"; } # single or double
+   }
+
+   # printf "Adding Font %02x: %s, ", $S->_num_of_fonts, $_[9];
+   # print "<font$font_open>$open bla $close</FONT>\n";
+
+   # family  
+   # charset
+   # unknown
+   # Fontname
+
+   $font_open = "FONT$font_open" if $font_open;
+   $font_close = "</FONT>" if $font_open;
+   $S->font->[$num] = [$font_open, $open, $close, $font_close, $_[2]];
+   # printf("Adding font %02x: color#=%02x\n", $num, $_[2]);
+}
+
+sub cell {
+   my ($S, $row, $col) = @_;
+   $S -> maxrow ($row) if $row > $S -> maxrow();
+   $S -> maxcol ($col) if $col > $S -> maxcol();
+   unless (defined $S -> sheet -> {$row} -> {$col}) {
+      my $Cell = {};
+      $S -> sheet -> {$row} -> {$col} = $Cell;
+   }
+   $S -> sheet -> {$row} -> {$col};
+}
+
+sub _Cell {
+   my ($S, $thing, $row, $col, $buf) = @_;
+   my $cell = $S -> cell($row, $col);
+   if (defined $buf) {
+      $cell -> {$thing} = $buf;
+   }
+   $cell -> {$thing};
+}
+
+sub rows { my ($S)       = @_; [sort {$a<=>$b} keys %{$S -> sheet}]; }
+sub cols { my ($S, $row) = @_; [sort {$a<=>$b} keys %{$S -> sheet -> {$row}}]; }
+
+sub Cell_Formula { shift -> _Cell("for", @_) }
+sub Cell_Style   { shift -> _Cell("sty", @_) }
+sub Cell_Text    { shift -> _Cell("tex", @_) }
+
+sub Cell_Font {
+   my ($S, $row, $col) = @_;
+   $font = $S -> font -> [
+      $S -> format -> [$S->Cell_Style($row, $col)] -> [0]
+   ];
+}
+
+sub parse {
+##
+## color: 255==no_color  bit1==nocellcolor
+## debug: 1,2
+##
+   my ($S, $buf, $allow_color, $debug_level) = @_;
+
+   my $text = "";
+
+   my ($fsize, $l, $o, $type);
+   my ($row, $col, $style, $len, $num);
+   my ($xdebug);
+
+   $fsize=length($buf);
+
+   $o = 0;
+   while ($o<$fsize) {
+      #
+      # 00 word  type of entry
+      # 02 word  len of entry
+      #
+      ($type, $l) = get_nword(2, \$buf, $o); $o+=4;
+      $xdebug=0;
+
+      if (0x0000 == $type) {
+      } elsif (0x0006 == $type) { # Cell: Formula
+         # ...
+         # 14 word  strlen
+         # 16 char* math
+         #
+         ($dest_row, $dest_col, $style) = get_nword(3, \$buf, $o);
+         my $math = substr($buf, $o+0x16, get_word(\$buf, $o+0x14));
+
+         $S -> Cell_Style   ($dest_row+1, $dest_col+1, $style);
+         $S -> Cell_Formula ($dest_row+1, $dest_col+1, $math);
+      } elsif (0x000e == $type) { # Doc: Default number precision
+         # 00 word  precision
+         $S -> precision (get_word(\$buf, $o)+1);
+      } elsif (0x0014 == $type) { # Doc: Page header
+         # 00 byte  strlen
+         # 01 char* Format-text
+      } elsif (0x0015 == $type) { # Doc: Page footer
+         # 00 byte  strlen
+         # 01 char* Format-text
+      } elsif (0x0031 == $type) { # Doc: Font
+         # 00 word  font       height (twips)
+         # 02 word  attrib     Bit 1:italic, 3:struck_out, 4:outline, 5:shadow
+         # 04 word  color      index 
+         # 06 word  bold       (0x0190==standard_plain, 0x02bc==standard_bold)
+         # 08 word  super      0:none 1:superscript 2:subscript
+         # 0a byte  underline  0:none 1:single 2:double +0x20:accounting
+         # 0b byte  family  
+         # 0c byte  charset
+         # 0d byte  unknown
+         # 0e byte  strlen
+         # 0f char* Fontname
+         $S -> add_font (
+            get_struct("WWWWWBBBB", \$buf, $o),
+            substr($buf, $o+0x0f, get_byte(\$buf, $o+0xe))
+         );
+      } elsif (0x0042 == $type) { # Doc: Codepage
+         # 00 word  codepage
+         $text .= sprintf("Codepage %d\n", get_word(\$buf, $o));
+      } elsif (0x004d == $type) { # Doc: Printer Info
+         # printer info
+      } elsif (0x005c == $type) { # Doc: Authress
+         # authress?
+         # 00 byte  strlen
+         # 01 char* 
+         $S -> authress ( substr($buf, $o+1, get_byte(\$buf, $o)) );
+      } elsif (0x007d == $type) { # Cell: width of column
+         #
+         # 00 word  row
+         # 02 word  column
+         # 04 word  width of column (1366 =^ 1 cm)
+         # 06 byte[5] unknown
+         #
+      } elsif (0x0085 == $type) { # Doc: Table
+         #
+         # 00 long  offset    Table starts at this offset
+         # 04 word  unknown
+         # 06 byte  strlen
+         # 07 char*           Name of table
+         #
+         # Can defines several tables, here I just take the first...
+         if (!$Sheet -> Table_Name) {
+            my ($to, $q, $strlen) = get_struct("LWB", \$buf, $o);
+            $Sheet -> Table_Name (substr($buf, $o+7, $strlen));  
+         } else {
+            $Sheet -> Table_Name ("");
+         }
+         $text .= sprintf("Table: %s\n",
+            substr($buf, $o+7, get_byte(\$buf, $o+6))
+         );
+      } elsif (0x0092 == $type) { # Document: Color Table
+         my $num = get_word(\$buf, $o);
+         my @colors = get_nlong($num, \$buf, $o+2);
+         $S -> load_colormap (\@colors) 
+            unless ($allow_color==255 || $allow_color&1)
+         ;
+      } elsif (0x00e0 == $type) { # Document: Extended Format
+         #
+         # 00 word    font index
+         # 02 word    format index
+         # 04 word    something
+         # 06 word    alignment
+         # 08 word    something
+         # 0a word[3] something
+         $S -> add_format (
+            get_struct("WWWWWWWW", \$buf, $o)
+         );
+      } elsif (0x0201 == $type) { # Cell: empty
+         ($row, $col, $style) = get_nword(3, \$buf, $o);
+         $S -> Cell_Style ($row+1, $col+1, $style);
+         $S -> Cell_Text  ($row+1, $col+1, "");
+      } elsif (0x0203 == $type) { # Cell: Real
+         #
+         # 00 word    row
+         # 02 word    column
+         # 04 word    style #
+         # 06 double  (Intel format)
+         #
+         ($row, $col, $style, $float) = get_struct("WWWD", \$buf, $o);
+         $text .= sprintf("Cell %02d:%02d [%02x] $float\n",
+            $row, $col, $style
+         );
+         $S -> Cell_Style ($row+1, $col+1, $style);
+         $S -> Cell_Text  ($row+1, $col+1, "$float");
+      } elsif (0x0204 == $type) { # Cell: Text
+         #
+         # 00 word  row
+         # 02 word  column
+         # 04 word  style #
+         # 06 word  strlen
+         # 08 char* 
+         #
+         ($row, $col, $style, $len) = get_nword(4, \$buf, $o);
+         $text .= sprintf("Cell %02d:%02d [%02x] %s\n",
+            $row, $col, $style, substr($buf, $o+8, $len)
+         );
+         $S -> Cell_Style ($row+1, $col+1, $style);
+         $S -> Cell_Text  ($row+1, $col+1, substr($buf, $o+8, $len));
+      } elsif (0x0208 == $type) { # Row
+      } elsif (0x027e == $type) { # Datum
+         ($row, $col, $style) = get_nword(3, \$buf, $o);
+         $float = "\0\0\0\0".substr($buf, $o+6, 4);
+         $float = get_double(\$float, 0);
+         $S -> Cell_Style ($row+1, $col+1, $style);
+         $S -> Cell_Text  ($row+1, $col+1, "$float");
+      } elsif (0x0293 == $type) { # Doc: Style
+         #
+         # 00 byte  number?
+         # 01 byte  0x80
+         # 02 byte  number?
+         # 03 byte  0xff
+      } elsif (0x041e == $type) { # Doc: Formatstring
+         #
+         # 00 word  format number
+         # 02 byte  strlen
+         # 03 char* formatstring
+         $num = get_word(\$buf, $o+0);
+         $len = get_byte(\$buf, $o+2);
+         $text .= sprintf("Format %02x: %s\n", $num, substr($buf, $o+3, $len));
+      } elsif (0x0809 == $type) { # Doc: New Table
+         #
+         # 00 byte[8]  unknown
+         #
+      } else {
+         $xdebug = 1;
+      }
+
+      if ($debug_level==1 && $xdebug || $debug_level==2) {
+         printf("type = %04x (o=%06x, l=%04x):\n", $type, $o-4, $l);
+         my @list = (); my $str = substr($buf, $o, $l);
+         while($str) {
+            push(@list, substr($str, 0, 16)); 
+            substr($str, 0, 16)="";
+         }
+         for (@list) {
+            my $s = "   "; my $l = length($_); next if !$l;
+            $s .= sprintf("%02x " x $l, unpack("C$l", $_));
+            $s .= " " x (55 - length($s));
+            s/[^0-9a-zA-Z ‰ˆ¸ƒ÷‹_;,:.#@<>\|\^\∞\'\~\+\*\-\!\"\ß\$\%\&\/\(\)\]]/./g;
+            $s .= $_;
+            print "$s\n";
+         }
+      }
+
+      $o += ($l);
+   }
+   foreach $row (@{$S->rows}) {
+      foreach $col (@{$S->cols($row)}) {
+         $S->calculate($row, $col);
+      }
+   }
+   $S->default_color(
+      $S->font->[
+         $S->format->[15]->[0]
+      ]->[4]
+   );
+1}
+
+sub _float_to_date { # F
+   my ($date) = @_;
+   $date;
+
+   my @monsum = (
+      0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334,
+      -1, 31, 60, 91, 121, 152, 182, 213, 244, 274, 305, 335
+   );
+
+   my ($day, $month, $year, $switch, $i);
+
+   $year = int( $date/365.2425 ) + 1900;
+   $switch = !($year%4) && 12 || 0;
+
+   $date -= int($year-1900)*365 + int(($year-1900)/4);
+
+   for( $i=11; $i && ($date <= $monsum[$switch+$i]); $i--) {}
+   $month = $i+1;
+   $day   = $date - $monsum[$switch+$i];
+
+   $date = sprintf("%02d.%02d.%02d", $day, $month, $year);
+}
+
+"Atomkraft? Nein, danke!"
+
+__END__
+
+=head1 NAME
+
+Herbert - converts Excel files
+
+- ALPHA release -
+
+Converts simple MS Excel documents to HTML. 
+
+=head1 SYNOPSIS
+
+Example: 
+
+herbert expenses.xls --noinfo
+
+=head1 DESCRIPTION
+
+ Herbert V1.19 (1998/03/03) - ALPHA - converts Excel-Sheets to HTML
+ usage: Herbert {--option [arg]} file(s)
+    --colorframe s  Outer frame will get color #s (9999bf)
+    --colorsheet s  Worksheet will get color #s (cfcfcf)
+    --dest_base  s  Store output files based at this directory.
+    --dirmode    s  New directories get access mode s (0700)
+    --filemode   s  New files get access mode s (0600)
+    --from_stdin    Take input from stdin.
+    --herbert       Very short info about Herbert Baum.
+    --log           Write a logfile.
+    --nocellcolor   Cell text gets no special color.
+    --nocolor       No colors will be used.
+    --noframe       Spreadsheet will not get an outer frame.
+    --nogrid        Spreadsheet will have no grid.
+    --noinfo        Do not include info about original document.
+    --nopack        Empty leading lines will be displayed.
+    --overwrite     Overwrite existing files.
+    --recurse       Operate recursively on directories.
+    --relative      Store files relatively to destdir when in recurse mode.
+    --src_base   s  Regard this as start directory in relative mode.
+    --suffix     s  Output files shall get suffix s (.html)
+    --to_stdout     Write output to stdout.
+
+=head1 SEE ALSO
+
+L<OLE::Storage>, L<Startup>
+
+=head1 BUGS
+
+=over 4
+
+=item -
+
+Cell styles are not resolved correctly. This results in dates represented as
+number, wrong colors and more. Will get fixed sooner or later. 
+
+=item Missing
+
+Graphics.
+
+Some functions, even some mathematical functions.
+
+Lots more.
+
+=back
+
+=head1 ABOUT
+
+This program is dedicated to Herbert Baum and the anti Nazi group with him. 
+Most of the group was killed 1942 after attacking a propaganda exhibition.
+1984 students tried to name the main building of TU Berlin after him.
+
+If german language is ok for you, just have a look at:
+
+http://www.cs.tu-berlin.de/studis/asta/unikur/u34/her-baum.html
+
+=head1 AUTHOR
+
+Martin Schwartz E<lt>F<schwartz@cs.tu-berlin.de>E<gt>.
+
+=cut
+

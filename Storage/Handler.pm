@@ -1,9 +1,9 @@
 #
-# $Id: Handler.pm,v 0.3.8.1 1997/10/25 01:15:01 schwartz Exp $
+# $Id: Handler.pm,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
 #
 # OLE::Storage::Handler
 #
-# Copyright (C) 1996, 1997 Martin Schwartz 
+# Copyright (C) 1996, 1997, 1998 Martin Schwartz 
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -25,8 +25,8 @@
 
 package OLE::Storage::Handler;
 use strict;
-my $VERSION=do{my@R=('$Revision: 0.3.8.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
-my $debug=1;
+my $VERSION=do{my@R=('$Revision: 1.1.1.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $debug=0;
 
 # $types = {
 #    0x1e => {
@@ -152,7 +152,7 @@ __END__
 
 OLE::Storage::Handler - Handle functions for OLE::Storage::Var
 
-$Revision: 0.3.8.1 $ $Date: 1997/10/25 01:15:01 $
+$Revision: 1.1.1.1 $ $Date: 1998/02/25 21:13:00 $
 
 =head1 SYNOPSIS
 

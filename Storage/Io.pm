@@ -1,9 +1,9 @@
 #
-# $Id: Io.pm,v 0.3.8.1 1997/10/25 01:15:01 schwartz Exp $
+# $Id: Io.pm,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
 #
 # Io.pm
 #
-# Copyright (C) 1996, 1997 Martin Schwartz 
+# Copyright (C) 1996, 1997, 1998 Martin Schwartz 
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -25,7 +25,7 @@
 
 package OLE::Storage::Io;
 use strict;
-my $VERSION=do{my@R=('$Revision: 0.3.8.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $VERSION=do{my@R=('$Revision: 1.1.1.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
 my $IOnum = 0;
 
 use OLE::Storage::Iolist(); 
@@ -95,18 +95,18 @@ sub name {
 
 sub open { 
 #
-# $Io||0 = open ($Error, $filename [,$openmode [,\$streambuf]]);
+# $Io||0 = open ($Startup, $filename [,$openmode [,\$streambuf]]);
 #
 # openmode bitmask (0 is default):
 #
 # Bit 0:  0 read only   1 read and write
 # Bit 4:  0 file mode   1 buffer mode 
 #
-   my ($proto, $Error, $filename, $openmode, $bufR) = @_;
+   my ($proto, $Startup, $filename, $openmode, $bufR) = @_;
    my $class = ref($proto) || $proto;
    my $S = bless ({}, $class);
 
-   $S->_Error    ($Error);			# error object
+   $S->_Startup  ($Startup);			# startup object
    $S->_iolist   (new OLE::Storage::Iolist());	# iolist object
    $S->_mode     ($openmode || 0);		# s.a.
    $S->_name     ($filename || "");		# name of file or buffer
@@ -144,7 +144,7 @@ sub read {
       } else {
          $status = seek($S->_io, $fo, 0) 
             && (read($S->_io, $$bufR, $num, $vo) == $num)
-            || _error($S, "Read error!")
+            || $S->_error("Read error!")
          ;
       }
    }
@@ -206,7 +206,7 @@ sub write {
    my ($S, $fo, $num, $buf_or_bufR, $vo) = @_;
    my $bufR = _buf_or_bufR($buf_or_bufR);
 
-   return _error ("Cannot write! (File is opened as read-only)") 
+   return $S->_error ("Cannot write! (File is opened as read-only)") 
       if !$S->_writable
    ;
    if (!$vo) {
@@ -223,7 +223,7 @@ sub write {
    } else {
       seek($S->_io, $fo, 0) 
          && (print {$S->_io} $tmp)
-         || _error($S, "Write error!")
+         || $S->_error("Write error!")
       ;
    }
 }
@@ -252,7 +252,7 @@ sub _buf_or_bufR {
 
 sub _error { 
    my $S = shift;
-   $S->_Error->error(@_) if defined $S->_Error;
+   $S->_Startup->error(@_) if $S->_Startup;
 }
 
 sub _init_file {
@@ -266,20 +266,20 @@ sub _init_file {
    my $fn = $S->_name;
    my $IOname = "$class.$S.$$.".$IOnum++;
 
-   return _error($S, "File \"$fn\" does not exist!")   if ! -e $fn;
-   return _error($S, "\"$fn\" is a directory!")        if   -d $fn;
-   return _error($S, "\"$fn\" is no proper file!")     if ! -f $fn;
-   return _error($S, "Cannot read \"$fn\"!")           if ! -r $fn;
+   return $S->_error("File \"$fn\" does not exist!")   if ! -e $fn;
+   return $S->_error("\"$fn\" is a directory!")        if   -d $fn;
+   return $S->_error("\"$fn\" is no proper file!")     if ! -f $fn;
+   return $S->_error("Cannot read \"$fn\"!")           if ! -r $fn;
 
    if ($S->_mode & 1) {
-      return _error($S, "\"$fn\" is write protected!") if ! -w $fn;
+      return $S->_error("\"$fn\" is write protected!") if ! -w $fn;
       $S->_writable(1);
       $status = open($IOname, '+<'.$fn);
    } else {
       $S->_writable(0);
       $status = open($IOname, $fn);
    }
-   return _error($S, "Cannot open \"$fn\"!") if !$status;
+   return $S->_error("Cannot open \"$fn\"!") if !$status;
    $S->_io(*$IOname{IO});
 
    binmode($S->_io); 
@@ -301,14 +301,14 @@ sub _init_stream {
 # 1||0 = _init_stream ($S, \$streambuf);
 #
    my ($S, $bufR) = @_;
-   return _error($S, "No stream data available!") if !defined $bufR;
+   return $S->_error("No stream data available!") if !defined $bufR;
    $S->_size(length($$bufR));
    $S->_cache($bufR);
 1}
 
 sub _io_method {
    my ($S, $rw) = @_;
-   return _error("Bad IO method \"$rw\"!") if !($rw =~ /^[rw]$/);
+   return $S->_error("Bad IO method \"$rw\"!") if !($rw =~ /^[rw]$/);
 1}
 
 sub _rw_io {
@@ -329,14 +329,14 @@ sub _rw_io {
 # -- memberEss methods -----------------------------------------------------
 #
 
-sub _cache    { my $S = shift; $S->{IOBUFR} = shift if @_; $S->{IOBUFR} }
-sub _Error    { my $S = shift; $S->{ERROR}  = shift if @_; $S->{ERROR} }
-sub _io       { my $S = shift; $S->{IO}     = shift if @_; $S->{IO} }
-sub _iolist   { my $S = shift; $S->{IOLIST} = shift if @_; $S->{IOLIST} }
-sub _mode     { my $S = shift; $S->{MODE}   = shift if @_; $S->{MODE} }
-sub _name     { my $S = shift; $S->{NAME}   = shift if @_; $S->{NAME} }
-sub _size     { my $S = shift; $S->{SIZE}   = shift if @_; $S->{SIZE} }
-sub _writable { my $S = shift; $S->{WRITE}  = shift if @_; $S->{WRITE} }
+sub _cache    { my $S = shift; $S->{IOBUFR}  = shift if @_; $S->{IOBUFR} }
+sub _Startup  { my $S = shift; $S->{STARTUP} = shift if @_; $S->{STARTUP} }
+sub _io       { my $S = shift; $S->{IO}      = shift if @_; $S->{IO} }
+sub _iolist   { my $S = shift; $S->{IOLIST}  = shift if @_; $S->{IOLIST} }
+sub _mode     { my $S = shift; $S->{MODE}    = shift if @_; $S->{MODE} }
+sub _name     { my $S = shift; $S->{NAME}    = shift if @_; $S->{NAME} }
+sub _size     { my $S = shift; $S->{SIZE}    = shift if @_; $S->{SIZE} }
+sub _writable { my $S = shift; $S->{WRITE}   = shift if @_; $S->{WRITE} }
 
 "Atomkraft? Nein, danke!"
 
@@ -379,12 +379,12 @@ Returns name of I<$Io>.
 
 =item open
 
-I<$Io>||C<O> == open (I<$Error>, I<$name>, [,I<$mode> [,I<\$streambuf>]])
+I<$Io>||C<O> == open (I<$Startup>, I<$name>, [,I<$mode> [,I<\$streambuf>]])
 
 Constructor. Gives access to a file or a buffer. Default I<$mode> is 0,
 that is read only. In file mode I<$name> is a filepath. In buffer mode
 a reference to a buffer I<\$streambuf> is mandatory. Errors occuring
-at Io methods will be reported to OLE::Storage::Error object I<$Error>.
+at Io methods will be reported to Startup object I<$Startup>.
 
    Bit	Mode
    0	0 read only	1 read/write
@@ -429,7 +429,7 @@ this offset on.
 
 =head1 SEE ALSO
 
-L<OLE::Storage::Iolist>, L<OLE::Storage::Error>
+L<OLE::Storage::Iolist>, L<Startup>
 
 =head1 AUTHOR
 

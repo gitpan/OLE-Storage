@@ -14,8 +14,12 @@ the demo programs:
    lhalw   - converts MS Word 6+ docs to text
    lls     - lists file structure of OLE docs
 
-The demo programs will be copied to /usr/local/bin/ by default. You can
-change this by modifying "INSTALLSCRIPT" in Makefile.PL.
+If you need assure where to install executables, library files and manpages, 
+install the distribution with the PREFIX option, like:
+
+   perl Makefile.PL PREFIX=/usr/local/
+
+   make install
 
 Martin
 

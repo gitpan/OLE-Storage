@@ -1,16 +1,22 @@
 
 Hello!
 
-Welcome to OLE-Storage-0.381.tar.gz
+Welcome to OLE-Storage-0.383.tar.gz
 
 A perl 5 distribution of a Structured Storage interface. 
 
 
-Available at:
+To be found at: 
 
-    http://wwwwbs.cs.tu-berlin.de/~schwartz/pmh/index.html
+   http://wwwwbs.cs.tu-berlin.de/~schwartz/perl/
 
-    http://www.cs.tu-berlin.de/~schwartz/pmh/index.html
+   http://www.cs.tu-berlin.de/~schwartz/perl/
+
+
+Further requirements:
+
+You need the modules "Unicode::Map" and "Startup.pm", both available
+at the address above.
 
 
 What is Structured Storage?
@@ -30,17 +36,28 @@ access to PropertySets as they are defined e.g. in those OLE documents.
 What can you do with OLE::Storage?
 
 If you have to deal with binary documents done at MS Windows platforms,
-but your locale machine is not, you might find a developing tool. Apart
+but your locale machine is not, you might use it as developing tool. Apart
 from this, the distribution contains some utilities:
 
-- "lhalw" converts MS Word 6+ documents to plain text.
+lhalw   
+   converts MS Word 6+ documents to plain text. (But Word 8 
+   is not fully supported)
 
-- "lls" analyzes the document's structure.
+herbert
+   Converts simple MS Excel documents to HTML.
 
-- "ldat" lists a document's properties. So it could be used e.g. to look, 
-  who created a document when.
+lls
+   Lists the document's structure, saves its streams.
 
-- "lclean" lists and removes the trash sections from documents.
+ldat
+   Lists document's properties. It can be used to look who created a 
+   document when.
+
+lclean
+   Lists and removes the trash sections from documents.
+
+mkWinwordIndex
+   Creates a HTML index for your Office files.
 
 
 Has it something to do with LAOLA?
@@ -53,7 +70,9 @@ that the modules are standalone and have no contact at all to Microsoft's
 OLE interfaces.
 
 
-Module list:
+Module list
+
+OLE::Storage is settled in CPAN's module list at category 7:
 
 OLE::
 ::Storage          aupO  Structured Storage / OLE document interface

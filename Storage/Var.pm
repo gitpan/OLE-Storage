@@ -1,11 +1,11 @@
 #
-# $Id: Var.pm,v 0.3.8.1 1997/10/25 01:15:02 schwartz Exp $
+# $Id: Var.pm,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
 #
 # OLE::Storage::Var
 #
 # Property variable handling.
 #
-# Copyright (C) 1996, 1997 Martin Schwartz 
+# Copyright (C) 1996, 1997, 1998 Martin Schwartz 
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -27,11 +27,12 @@
 
 package OLE::Storage::Var;
 use strict;
-my $VERSION=do{my@R=('$Revision: 0.3.8.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $VERSION=do{my@R=('$Revision: 1.1.1.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
 
 use OLE::Storage::Std;
 use OLE::Storage::Handler();
 use OLE::Storage::Property();
+use Unicode::Map();
 
 my $uncool_debug = 0;
 
@@ -48,8 +49,10 @@ sub new {
    ;
 }
 
-sub handler   { my $S=shift; $S->{H}=shift if @_; $S->{H} }
-sub property  { OLE::Storage::Property->new(@_) }
+sub cs_from  { my $S=shift; $S->{CS_FROM}=shift if @_; $S->{CS_FROM} }
+sub map      { my $S=shift; $S->{MAP}=shift if @_; $S->{MAP} }
+sub handler  { my $S=shift; $S->{H}=shift if @_; $S->{H} }
+sub property { OLE::Storage::Property->new(@_) }
 
 
 ##
@@ -113,6 +116,13 @@ sub _init_handling {
 #
    my $S = shift;
    my $H = $S->handler(OLE::Storage::Handler->new);
+
+   $S->map(
+      new Unicode::Map ({ 
+         ID => ( $ENV{LC_CTYPE} || "CP1252" ) 
+      })
+   );
+   return 0 if !$S->map;
 
    $H->add (0x00, "empty",	"store",  \&_0x00_store);
    $H->add (0x01, "null",	"store",  \&_0x01_store);
@@ -217,7 +227,7 @@ sub _0x1e_store {	# 0x1e == lpstr
 }
 sub _0x1f_store {	# 0x1f == lpwstr
    my ($bufR, $oR) = @_;
-   ["wstring", \get_zwstr($bufR, $oR, &get_long)];
+   ["wstring", \get_rzwstr($bufR, $oR, &get_long)];
 }
 sub _0x40_store {
    ["date", &_filetime_to_date];
@@ -236,7 +246,7 @@ sub _zstr_store {
 }
 sub _zwstr_store {
    my ($bufR, $oR) = @_;
-   ["wstring", \get_zwstr($bufR, $oR, length($$bufR))];
+   ["wstring", \get_rzwstr($bufR, $oR, length($$bufR))];
 }
 
 #
@@ -433,11 +443,23 @@ sub _guid_string  { my ($valR, $x, $par) = @_; sprintf $par, @$valR }
 sub _guid_wstring { _string_wstring (\_guid_string(@_), 0, "%s") }
 
 #
+# CLSIDs:
+#
+#    00020810-0000-0000-C000-000000000046 	Excel.Sheet.5
+#    00020900-0000-0000-C000-000000000046	Word.Document.6
+#    00020901-0000-0000-C000-000000000046	Word.Picture.6
+#    00020906-0000-0000-C000-000000000046	Word.Document.8
+#    00021A11-0000-0000-C000-000000000046       Visio
+#
+
+
+#
 # --- string ---------------------------------------------------------------
 #
 
 sub _init_string {
-   my $H = shift->handler();
+   my $S = shift;
+   my $H = $S->handler();
    $H->add (["string", "string", 
       "store",   \&_string_store,   "",
       "bool",    \&_string_bool,    "",		# .
@@ -446,8 +468,8 @@ sub _init_string {
       "int",     \&_string_int,     "",		# .
       "float",   \&_string_float,   "",		# .
       "guid",    \&_string_guid,    "",		# .
-      "string",  \&_string_string,  "%s",	# Y
-      "wstring", \&_string_wstring, "%s", 	# Y
+      "string",  \&_string_string,  "",		# Y
+      "wstring", \&_string_wstring, $S->map	# Y
    ]);
 }
 sub _string_store   { ["string", shift()] }
@@ -457,17 +479,16 @@ sub _string_date    { undef }
 sub _string_int     { undef }
 sub _string_float   { undef }
 sub _string_guid    { undef }
-sub _string_string  { my ($valR, $x, $par) = @_; sprintf $par, $$valR }
-sub _string_wstring { my ($valR, $x, $par) = @_;
-   join("\0", split(//, sprintf ($par, $$valR)))."\0";
-}
+sub _string_string  { ${$_[0]} }
+sub _string_wstring { $_[2]->to_unicode($_[0]) }
 
 #
 # --- wstring -----------------------------------------------------------------
 #
 
 sub _init_wstring {
-   my $H = shift->handler();
+   my $S = shift;
+   my $H = $S->handler();
    $H->add (["wstring", "wstring",
       "store",   \&_wstring_store,   "",	# Y
       "bool",    \&_wstring_bool,    "",	# .
@@ -476,8 +497,8 @@ sub _init_wstring {
       "int",     \&_wstring_int,     "",	# .
       "float",   \&_wstring_float,   "",	# .
       "guid",    \&_wstring_guid,    "",	# .
-      "wstring", \&_wstring_wstring, "%s",	# Y
-      "string",  \&_wstring_string,  "%s",	# Y
+      "wstring", \&_wstring_wstring, "",	# Y
+      "string",  \&_wstring_string,  $S->map	# Y
    ]);
 }
 sub _wstring_store  { ["wstring", shift()] }
@@ -487,22 +508,8 @@ sub _wstring_date   { undef }
 sub _wstring_int    { undef }
 sub _wstring_float  { undef }
 sub _wstring_guid   { undef }
-sub _wstring_string {
-   # cough, cough, (not a) unicode handling... 
-   my ($valR, $x, $par) = @_;
-   my $tmp = "";
-   my $l = length($$valR)/2;
-   for (0 .. $l-1) {
-      $tmp.=substr($$valR, $_*2, 1);
-   }
-   sprintf ($par, $tmp);
-}
-
-sub _wstring_wstring { 
-   my ($valR, $x, $par) = @_; 
-   sprintf $par, $$valR 
-}
-
+sub _wstring_string { $_[2]->from_unicode($_[0]) }
+sub _wstring_wstring { ${$_[0]} }
 
 #
 # --- myerror --------------------------------------------------------------
@@ -533,8 +540,8 @@ sub _myerror_date    { undef }
 sub _myerror_int     { undef }
 sub _myerror_float   { undef }
 sub _myerror_guid    { undef }
-sub _myerror_string  { &_string_string }
-sub _myerror_wstring { &_string_wstring }
+sub _myerror_string  { "" }
+sub _myerror_wstring { "" }
 sub _myerror_myerror { &_string_string }
 
 #
@@ -619,7 +626,7 @@ __END__
 
 OLE::Storage::Var - Variable handling for properties
 
-$Revision: 0.3.8.1 $ $Date: 1997/10/25 01:15:02 $
+$Revision: 1.1.1.1 $ $Date: 1998/02/25 21:13:00 $
 
 =head1 SYNOPSIS
 

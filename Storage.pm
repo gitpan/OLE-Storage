@@ -1,7 +1,7 @@
 #
-# $Id: Storage.pm,v 0.3.8.6 1997/10/28 00:01:53 schwartz Exp $
+# $Id: Storage.pm,v 1.2 1998/02/25 22:55:12 schwartz Exp $
 #
-# OLE::Storage.pm, a Structured Storage interface 
+# OLE::Storage, a Structured Storage interface 
 #
 # Also known as: Laola filesystem.
 #
@@ -56,7 +56,7 @@
 #
 
 package OLE::Storage;
-my $VERSION=do{my@R=('$Revision: 0.3.8.6 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $VERSION=do{my@R=('$Revision: 1.2 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
 $[=0;
 
 #  
@@ -80,17 +80,13 @@ no strict;
 
 use OLE::Storage::Std;
 use OLE::Storage::Var();
-use OLE::Storage::Error();
 use OLE::Storage::Io(); 
 
-sub Error    { my $S=shift; $S->{ERROR} = shift if @_; $S->{ERROR} }
-sub Var      { my $S=shift; $S->{VAR}   = shift if @_; $S->{VAR} }
-sub NewError { OLE::Storage::Error::new qw(OLE::Storage::Error) }
+sub Startup  { my $S=shift; $S->{STARTUP} = shift if @_; $S->{STARTUP} }
+sub Var      { my $S=shift; $S->{VAR}     = shift if @_; $S->{VAR} }
 sub NewVar   { OLE::Storage::Var::new qw(OLE::Storage::Var) }
 
-sub _error { 
-   defined $S->{ERROR} ? $S->{ERROR}->error(@_) : 0;
-}
+sub _error   { $S->{STARTUP} ? $S->{STARTUP}->error(@_) : 0 }
 
 ##
 ## File and directory handling
@@ -98,22 +94,22 @@ sub _error {
 
 sub open { 
 #
-# $Doc||0 = open($Error, $Var, $file [,$mode [,\$streambuf]]);
+# $Doc||0 = open($Startup, $Var, $file [,$mode [,\$streambuf]]);
 #
 # mode bitmask (0 is default):
 #
 # Bit 0:  0 read only   1 read and write
 # Bit 4:  0 file mode   1 buffer mode 
 #
-   my ($proto, $Error, $Var, $name, $mode, $bufR) = @_;
+   my ($proto, $Startup, $Var, $name, $mode, $bufR) = @_;
    my $class = ref($proto) || $proto;
    local $S = bless(_init_vars(), $class);
 
-   $S->Error($Error);
-   $S->Var($Var);
+   $S->Startup($Startup);
+   return _error("'Var' object not specified!") if !$S->Var($Var);
 
    return 0 if !(
-      $S->{IO} = OLE::Storage::Io->open($Error, $name, $mode, $bufR)
+      $S->{IO} = OLE::Storage::Io->open($Startup, $name, $mode, $bufR)
    );
 
    if (!_init_doc()) {
@@ -333,6 +329,7 @@ sub _init_doc {
       for (1..$S->{HEAD}->{B_XD_NUM}) {
          $Iolist->append(_h_s() + $bl*_b_s(), _b_s()-4);
          $bl = read_long($S->{IO}, _h_s() + $bl*_b_s() + _b_s()-4);
+         last if $bl >= _B_EOC();
       }
       $S->{HEAD}->{B_DL_L} = $Iolist;
    }
@@ -345,7 +342,7 @@ sub _init_doc {
       @{$S->{BL}->{B_DL}} = get_nlong($S->{HEAD}->{B_D_NUM}, \$tmp, 0);
 
       return 0 if !$S->{IO}->read_iolist(\$tmp, 
-         _get_iolist(3, 0, 0xffffffff, 0, $S->{BL}->{B_DL})
+         _get_iolist(3, 0, _S_MAX(), 0, $S->{BL}->{B_DL})
       );
       @{$S->{BL}->{B_D}} = get_nlong($S->{BL}->{B_NUM}+1, \$tmp, 0);
    }
@@ -354,7 +351,7 @@ sub _init_doc {
    {
       $S->{BL}->{S_DL} = _get_list_from_depot($S->{HEAD}->{S_D_SB}, "B");
       return 0 if !$S->{IO}->read_iolist(\$tmp, 
-         _get_iolist(3, 0, 0xffffffff, 0, $S->{BL}->{S_DL})
+         _get_iolist(3, 0, _S_MAX(), 0, $S->{BL}->{S_DL})
       );
       @{$S->{BL}->{S_D}} = get_nlong($S->{BL}->{S_NUM}+1, \$tmp, 0);
    }
@@ -433,6 +430,10 @@ sub _get_all_filehandles {
    );
 }
 
+#
+# -- some macros -----------------------------------------------------------
+#
+
 sub _h_s        { 0x200 }			# header size
 sub _b_s        { $S->{HEAD}->{B_S} }		# big block size
 sub _s_s        { $S->{HEAD}->{S_S} }		# small block size
@@ -440,8 +441,15 @@ sub _b_s_min    { $S->{HEAD}->{B_S_MIN} }	# big file minimal size
 sub _bdepottype { $S->{PPS}[shift]->{SIZE} >= _b_s_min() }
 sub _blocktype  { $S->{PPS}[shift]->{SIZE} >= _b_s_min() ? "B" : "S" }
 
+sub _B_FREE     { 0xffffffff }	# block entry, free block
+sub _B_EOC	{ 0xfffffffe }	# block entry, end of chain
+sub _B_BD	{ 0xfffffffd }	# block entry, block depot
+sub _B_XBD	{ 0xfffffffc }	# block entry, extra block depot
+
+sub _S_MAX      { 0xffffffff }	# maximal stream size (* byte)
+
 ##
-## --------------------------- IO logic ------------------------------
+## --------------------------- IO logic ------------------------------------
 ##
 
 sub ole_head {
@@ -472,7 +480,7 @@ sub _read_ppss_buf {
 # 0..NLEN char()  NAME    
 # 40      word    NLEN 
 # 42      byte    TYPE        
-# 44      byte    UK0         
+# 43      byte    UK0         
 # 44      long    PREV        
 # 48      long    NEXT        
 # 4c      long    DIR         
@@ -495,9 +503,14 @@ sub _read_ppss_buf {
    ($P->{SB}, $P->{SIZE}) 
       = get_struct("LL", $bufR, $o+0x74)
    ;
-   $P->{NAME} = $S->Var->property(
-      \get_zwstr($bufR, $o+0, $P->{NLEN}), 0, "wstring"
+
+   $P->{NAME} = $S->Var->property (
+       \get_rzwstr($bufR, $o+0, $P->{NLEN}),
+       0, "wstring"
    );
+
+   $P->{CLSID} = $S->Var->property ($bufR, 0x50, 0x48);
+
    if ($P->{TYPE} != 2) { 
       # !!
       # Files (type==2) have no timestamp (until now?). Not reading this 
@@ -550,7 +563,7 @@ sub _get_list_from_depot {
    my ($b, $t) = @_;
    my @list = ();
 
-   while ($b != 0xfffffffe) {
+   while ($b != _B_EOC()) {
       push (@list, $b); 
       $b = $S->{BL}->{$t."_D"}[$b];
    }
@@ -608,7 +621,7 @@ sub _get_iolist {
 
    $done = 0;
    for ( $di=$sb; 
-         ($t<2) ? ($di!=0xfffffffe) : ($di<=$max);
+         ($t<2) ? ($di!=_B_EOC()) : ($di<=$max);
          $di=&{$__next_dl->[$t]}
    ) {
       last if ($done == $size);
@@ -686,10 +699,10 @@ sub _make_blockuse_statistic {
 
    # free blocks according to block depots
    for (0..@{$Bl->{B_D}}) { 
-      $S->{USE}->{BB}[$_]=1 if $Bl->{B_D}[$_]==0xffffffff 
+      $S->{USE}->{BB}[$_]=1 if $Bl->{B_D}[$_]==_B_FREE() 
    }
    for (0..@{$Bl->{S_D}}) { 
-      $S->{USE}->{SB}[$_]=1 if $Bl->{S_D}[$_]==0xffffffff 
+      $S->{USE}->{SB}[$_]=1 if $Bl->{S_D}[$_]==_B_FREE() 
    }
 
    #
@@ -724,7 +737,7 @@ sub _get_trash_info {
    unused_big_blocks: {
       _store_trash_iolist(0,
          _get_iolist(
-            3, 0, 0xfffffff, 0, 
+            3, 0, _S_MAX(), 0, 
             [grep {$S->{USE}->{BB}[$_]<=1} (0..$S->{BL}->{B_NUM})]
          )
       );
@@ -733,7 +746,7 @@ sub _get_trash_info {
    unused_small_blocks: {
       _store_trash_iolist(1,
          _get_iolist(
-            2, 0, 0xfffffff, 0, 
+            2, 0, _S_MAX(), 0, 
             [grep {$S->{USE}->{SB}[$_]<=1} (0..$S->{BL}->{S_NUM})]
          )
       );
@@ -742,23 +755,23 @@ sub _get_trash_info {
    unused_file_space: {
       # 3.1. normal files
       for (_get_all_filehandles(0)) {
-         _store_trash_iolist(2,
-            _get_iolist(_bdepottype($_), $S->{PPS}[$_]->{SIZE}, 
-            0xffffffff, $S->{PPS}[$_]->{SB})
-         );
+         _store_trash_iolist(2, _get_iolist(
+            _bdepottype($_), $S->{PPS}[$_]->{SIZE}, _S_MAX(), 
+            $S->{PPS}[$_]->{SB}
+         ));
       }
 
       # 3.2. system file of root_entry (small block file)
       $begin = $#{$S->{BL}->{S_D}}+1;
       _store_trash_iolist(2,
-         _get_iolist(2, 0, 0xfffffff, 0, [$begin .. $begin+(7-$begin%8)])
+         _get_iolist(2, 0, _S_MAX(), 0, [$begin .. $begin+(7-$begin%8)])
       );
 
       # 3.3. unused root list entries
       # _get_all_filehandles is done by 3.1, so array $S->{PPS} is complete.
       $begin = ($#{$S->{PPS}}+1)*0x80;
       _store_trash_iolist(2,
-         _get_iolist(3, $begin, 0xffffffff, 0, $S->{BL}->{ROOTL})
+         _get_iolist(3, $begin, _S_MAX(), 0, $S->{BL}->{ROOTL})
       );
    }
 
@@ -766,14 +779,14 @@ sub _get_trash_info {
       _store_trash_iolist(3,
         # 4.1. header block
         _get_iolist(4, 
-           ($S->{HEAD}->{B_D_NUM}+1)*4, 0xffffffff, 0, $S->{HEAD}->{B_DL_L}
+           ($S->{HEAD}->{B_D_NUM}+1)*4, _S_MAX(), 0, $S->{HEAD}->{B_DL_L}
         ),
 
         # 4.2. big block depot
-        _get_iolist(3, ($S->{BL}->{B_NUM}+1)*4, 0xffffffff,0, $S->{BL}->{B_DL}),
+        _get_iolist(3, ($S->{BL}->{B_NUM}+1)*4, _S_MAX(), 0, $S->{BL}->{B_DL}),
 
         # 4.3. small block depot
-        _get_iolist(3, ($S->{BL}->{S_NUM}+1)*4, 0xffffffff,0, $S->{BL}->{S_DL})
+        _get_iolist(3, ($S->{BL}->{S_NUM}+1)*4, _S_MAX(), 0, $S->{BL}->{S_DL})
       );
    }
 
@@ -865,25 +878,23 @@ __END__
 
 OLE::Storage - An Interface to B<Structured Storage> Documents.
 
-$Revision: 0.3.8.6 $ $Date: 1997/10/28 00:01:53 $
+$Revision: 1.2 $ $Date: 1998/02/25 22:55:12 $
 
 =head1 SYNOPSIS
 
 use OLE::Storage()
-
-I<$Err> = OLE::Storage->NewError ();
+use Startup;
 
 I<$Var> = OLE::Storage->NewVar ();
+I<$Startup> = new Startup;
 
-I<$Doc> = OLE::Storage->open (I<$Err>, I<$Var>, I<$file> [,I<$m>, I<\$buf>])
+I<$Doc> = OLE::Storage->open (I<$Startup>, I<$Var>, I<$file> [,I<$m>, I<\$buf>])
 
 I<$Doc> -> directory (I<$pps>, I<\%Names>, "I<string>")
 
 I<$Doc> -> read (I<$pps>, I<\$buf> [,I<$offset>, I<$size>])
 
 I<$Doc> -> close ()
-
-I<$Err> -> string ()
 
 Detailed syntax, descriptions and further methods: below.
 
@@ -938,12 +949,12 @@ B<Note>:
 Normally you will use directory () instead.
 To get the root directory, call dirhandles(0)
 
-=item Error
+=item Startup
 
-I<$Error> == I<$D> -> Error ([I<$NewError>])
+I<$Startup> == I<$D> -> Startup ([I<$NewStartup>])
 
-Gets the current I<$Error> handler. If an optional argument I<$NewError> is 
-given, this new handler will be installed and returned.
+Gets the current I<$Startup> handler. If an optional argument I<$NewStartup> 
+is given, this new handler will be installed and returned.
 
 =item is_directory
 
@@ -991,12 +1002,6 @@ I<$Name> == I<$D> -> name (I<$pps>)
 
 Returns the name of the property I<$pps> as Unicode Property.
 
-=item NewError
-
-I<$Error> == I<$D> -> NewError ()
-
-Creates a new Error handling object and returns it. (see also: open)
-
 =item NewVar
 
 I<$Var> == I<$D> -> NewVar ()
@@ -1005,12 +1010,12 @@ Creates a new Variable handling object and returns it. (see also: open)
 
 =item open
 
-I<$Doc>||C<O> == Storage -> open (I<$Err>, I<$file> [,I<$mode>, I<\$buf>])
+I<$Doc>||C<O> == Storage -> open (I<$Startup>, I<$Var>, I<$file> [,I<$mode>, I<\$buf>])
 
 Constructor. Open the document with document path I<$file>. I<$mode> can be
 read or read/write. If you additionally specify modus buffer, the document 
 data will be read from the buffer reference you specify with I<$buf>.
-Errors will be reported to Error object I<$Err>.
+Errors will be reported to Startup object I<$Startup> (if present).
 
 Open modes:
 
@@ -1067,7 +1072,7 @@ this new handler will be installed and returned.
 
 =head1 SEE ALSO
 
-L<OLE::Storage::Property>, L<OLE::Storage::Error>, L<OLE::Storage::Var>
+L<OLE::Storage::Property>, L<Startup>, L<OLE::Storage::Var>
 
 =head1 EXAMPLES 
 

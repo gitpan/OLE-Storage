@@ -1,9 +1,9 @@
 #
-# $Id: PropertySet.pm,v 0.3.8.2 1997/10/25 01:36:39 schwartz Exp $
+# $Id: PropertySet.pm,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
 #
 # OLE::PropertySet
 #
-# Copyright (C) 1996, 1997 Martin Schwartz 
+# Copyright (C) 1996, 1997, 1998 Martin Schwartz 
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -25,15 +25,13 @@
 
 package OLE::PropertySet;
 use strict;
-my $VERSION=do{my@R=('$Revision: 0.3.8.2 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $VERSION=do{my@R=('$Revision: 1.1.1.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
 
 use OLE::Storage::Std;
-use OLE::Storage::Error();
 use OLE::Storage::Var();
 
-sub Error    { my $S=shift; $S->{ERROR} = shift if @_; $S->{ERROR} }
+sub Startup  { my $S=shift; $S->{STARTUP} = shift if @_; $S->{STARTUP} }
 sub Var      { my $S=shift; $S->{VAR}   = shift if @_; $S->{VAR} }
-sub NewError { OLE::Storage::Error::new qw(OLE::Storage::Error) }
 sub NewVar   { OLE::Storage::Var::new   qw(OLE::Storage::Var) }
 
 # package globals
@@ -76,10 +74,10 @@ sub idstr {
 
 sub load {
 #
-# $self||0 = 1. load ($Err, $Var, $pps, $Doc [,$filter])
-# 	   = 2. load ($Err, $Var, $name, \$buf [,$filter])
+# $self||0 = 1. load ($Startup, $Var, $pps, $Doc [,$filter])
+# 	   = 2. load ($Startup, $Var, $name, \$buf [,$filter])
 #
-   my ($proto, $Err, $Var, $pps, $Doc, $filter) = @_;
+   my ($proto, $Startup, $Var, $pps, $Doc, $filter) = @_;
    my $class = ref($proto) || $proto;
 
    my $name;
@@ -90,7 +88,7 @@ sub load {
       $name = $Doc->name($pps)->string;
    }
 
-   my $S = _init($Err, $Var, $name, _type($name), $filter);
+   my $S = _init($Startup, $Var, $name, _type($name), $filter);
    bless ($S, $class);
 
    return $S->_error("This is not a PropertySet handle.") if !$S->{TYPE};
@@ -146,10 +144,7 @@ sub type {
 # --------------------------- private ------------------------------
 #
 
-sub _error { 
-   my $S = shift;
-   $S->{ERROR}->error(@_) if defined $S->{ERROR};
-}
+sub _error { my $S = shift; $S->{STARTUP}->error(@_) if defined $S->{STARTUP} }
 
 sub _filter {
    shift->{FILTER};
@@ -157,11 +152,11 @@ sub _filter {
 
 sub _init {
 #
-# $self||0 = _init ($Err, $Var, $name, $type [,$filter])
+# $self||0 = _init ($Startup, $Var, $name, $type [,$filter])
 #
-   my ($Err, $Var, $name, $type, $filter) = @_;
+   my ($Startup, $Var, $name, $type, $filter) = @_;
    {
-      ERROR	=> $Err,		# Error object
+      STARTUP	=> $Startup,		# Startup object
       VAR       => $Var,		# Var object
       FILTER	=> $filter,		# property filter method
     # aggregated data
@@ -343,6 +338,7 @@ sub _load_ppset_05 {
                $H->{CODEPAGE}->{$vid} = $S->_var->property($bufR, \$vo) 
                   -> int()
                ;
+               #printf "Codepage %d\n", $H->{CODEPAGE}->{$vid};
             } elsif ($id==0) {
                # read dictionary
                for (1..get_long($bufR, \$vo)) {
@@ -366,7 +362,7 @@ sub _load_ppset_05 {
 
 sub TIEHASH {
 #
-# $PropertySet||0 = TIEHASH $classname, $Err, $Var, $Doc, $pps [,$filter]
+# $PropertySet||0 = TIEHASH $classname, $Startup, $Var, $Doc, $pps [,$filter]
 #
    goto &load;
 }
@@ -490,28 +486,27 @@ __END__
 
 OLE::PropertySet - Handles Property Sets
 
-$Revision: 0.3.8.2 $ $Date: 1997/10/25 01:36:39 $
+$Revision: 1.1.1.1 $ $Date: 1998/02/25 21:13:00 $
 
 =head1 SYNOPSIS
 
  use OLE::Storage();
  use OLE::PropertySet();
 
- $Err = OLE::Storage -> NewError;
  $Var = OLE::Storage -> NewVar;
- $Doc = OLE::Storage -> open ($Err, $Var, "testfile.doc");
+ $Doc = OLE::Storage -> open ($Startup, $Var, "testfile.doc");
 
 =over 4
 
 =item direct mode
 
-I<$PS> = OLE::PropertySet->load (I<$Err>, I<$Var>, I<$pps>, I<$Doc>)
+I<$PS> = OLE::PropertySet->load (I<$Startup>, I<$Var>, I<$pps>, I<$Doc>)
 
 I<@list> = string { I<$PS> -> property (2, 5, 6) }
 
 =item tie mode
 
-I<$PS> = tie I<%PS>, OLE::PropertySet, I<$Err>, I<$Var>, I<$pps>, I<$Doc>
+I<$PS> = tie I<%PS>, OLE::PropertySet, I<$Startup>, I<$Var>, I<$pps>, I<$Doc>
 
 I<@list> = string { I<$PS>{2}, I<$PS>{5}, I<$PS>{6} }
 
@@ -569,9 +564,9 @@ dictionary (see dictionary).
 
 =item I<$PS>||C<0> ==
 
-1. load (I<$Err>, I<$Var>, I<$pps>, I<$Doc> [,C<filter>])
+1. load (I<$Startup>, I<$Var>, I<$pps>, I<$Doc> [,C<filter>])
 
-2. load (I<$Err>, I<$Var>, I<$name>, I<\$buf> [,C<filter>])
+2. load (I<$Startup>, I<$Var>, I<$name>, I<\$buf> [,C<filter>])
 
 =back
 
@@ -581,12 +576,6 @@ load() is the constructor of OLE::PropertySet. You can call it
 either with a Property Storage id I<$pps> and a Structured Storage 
 document handle I<$Doc> as parameters, or with an PropertySetName I<$name>
 and a reference to a PropertySetBuffer I<\$buf>.
-
-=item NewError
-
-I<$Error> == I<$PS> -> NewError ()
-
-Creates a new Error handling object and returns it. (see also: open)
 
 =item NewVar
 

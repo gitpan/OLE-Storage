@@ -1,9 +1,9 @@
 #
-# $Id: Iolist.pm,v 0.3.8.1 1997/10/25 01:15:02 schwartz Exp $
+# $Id: Iolist.pm,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
 #
 # Iolist
 #
-# Copyright (C) 1997 Martin Schwartz 
+# Copyright (C) 1997, 1998 Martin Schwartz 
 #
 # (POD documentation at end of file)
 #
@@ -12,7 +12,7 @@
 
 package OLE::Storage::Iolist;
 use strict;
-my $VERSION=do{my@R=('$Revision: 0.3.8.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $VERSION=do{my@R=('$Revision: 1.1.1.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
 
 sub new {
    my ($proto, $oR, $lR) = @_;

@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#$Id: lhalw,v 0.3.8.1 1997/10/25 01:15:07 schwartz Exp $
+#$Id: lhalw,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
 #
 # lhalw, Have A Look at Word 6+ Files
 #
@@ -38,87 +38,211 @@
 # You can contact me via schwartz@cs.tu-berlin.de
 #
 
-# Please change / uncomment (remove '#') setting according to your system.
-# $sys_os = "unix"; 
-# $sys_os = "dos";  
+my ($Doc, $Msg, $Startup, $Text, $Unicode, $Var);
+my ($stat_fast, $stat_crypted, $stat_unicode, $stat_verok);
 
-sub error {
-   defined $Error ? $Error->string(@_) : 0;
-}
+my $PROGNAME = "lhalw";
+my $VERSION=do{my@R=('$Revision: 1.1.1.1 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $DATE = ('$Date: 1998/02/25 21:13:00 $' =~ / ([^ ]*) /) && $1;
 
-use Getopt::Std;
+use Getopt::Long;
 use OLE::Storage::Std;
 
-main: {
-   $|=1; $[=0;
-   getopts ('c:CfFNS');
-   usage() if !@ARGV && !$opt_f;
+my ($Doc, $Startup, $Var, $text);
+my %opt = (
+   "dirmode"   => "0700",
+   "filemode"  => "0600",
+   "suffix"    => ".txt",
+);
+
+{
+   $|=1;
+   GetOptions (\%opt,
+      "log",
+      "src_base|source_base|source_dir=s",
+      "dest_base|destbase|destdir=s",
+      "from_stdin|from_0|from0",
+      "to_stdout|to_1|to1",
+      "filemode=s",
+      "dirmode=s",
+      "override|overwrite",
+      "help",
+      "recurse|recursive",
+      "column=s",
+      "control",
+      "no_warn",
+      "stupid",
+      "recode=s",
+      "suffix=s",
+   );
+   usage() if $opt{"help"} || (!@ARGV && !$opt{"from_stdin"});
 
    require OLE::Storage;
    require OLE::Storage::Textutil;
+   require Unicode::Map;
+   require Startup;
+   fail(1) unless $Startup = new Startup;
 
-   $Error = OLE::Storage->NewError();
-   $Var   = OLE::Storage->NewVar();
-   $Text  = OLE::Storage::Textutil->new($Error);
-   $Doc   = undef;
+   $Startup -> init ({
+      SUB_FILES  => \&handle_files,
+      SUB_STREAM => \&handle_stream,
+      PROG_DATE  => $DATE,
+      PROG_NAME  => $PROGNAME,
+      PROG_VER   => $VERSION,
+      FROM_STDIN => $opt{"from_stdin"},
+      SRCPATH    => $opt{"src_base"},
+      DESTPATH   => $opt{"dest_base"},
+      RECURSE    => $opt{"recurse"},
+      RELATIVE   => $opt{"relative"},
+      FILEMODE   => $opt{"filemode"},
+      DIRMODE    => $opt{"dirmode"},
+   });
 
-   $opt_f ? &handle_stream : &handle_files;
-   exit 0;
+   fail(2) unless $Map  = new Unicode::Map({"STARTUP"=>$Startup});
+   fail(3) unless $Text = new OLE::Storage::Textutil({"STARTUP"=>$Startup});
+   fail(4) unless $Var  = OLE::Storage->NewVar();
+
+   $Doc     = undef;
+
+   $Startup->allow_logging if $opt{"log"};
+   $Startup->open_log();
+
+   if (!($Var = OLE::Storage->NewVar())) {
+      error("No Var handle!"); exit 1;
+   }
+   $Doc = undef;
+
+   $Startup->go(@ARGV);
+
+   $Startup->close_log();
+   exit 1;
 }
 
 sub handle_stream {
-   if (-t STDIN) {
-      error("Nothing to do!"); err2(); return;
+   my ($dp) = @_;
+   $Startup->log('processing <STDIN>');
+   $Startup->msg_silent(0);
+   $Startup->msg('processing <STDIN>');
+   {
+      return _error("Nothing to do!") if -t STDIN;
+      undef $/;
+      return 0 if !($Doc = 
+         OLE::Storage->open($Startup, $Var, "<stdin>", 2**4, \<>)
+      );
    }
-   undef $/;
-   err2 ($Doc=OLE::Storage->open($Error, $Var, "input", 2**4, \<>)) 
-      && main_work()
-   ;
-}
+   return 0 if !main_work(0, 0, "$dp/stdin");
+   $Startup->msg_finish("done");
+1}
 
 sub handle_files {
-   foreach $infile (@ARGV) {
-      msg ("Processing \"$infile\":");
-      next if !(err2 ($Doc=OLE::Storage->open($Error, $Var, $infile)) 
-         && main_work())
-      ;
-      msg3("done.");
+   my ($sp, $sf, $dp, $status) = @_;
+   $Startup->msg_reset();
+
+   $Startup->log("processing $sp/$sf");
+   $Startup->msg("Processing \"$sf\"");
+
+   return _error ("File \"$sf\" doesn't exist!") if !$status;
+   return 1 if $status < 0;
+   {
+      return 0 if !($Doc = OLE::Storage->open($Startup, $Var, "$sp/$sf"));
+      $status = main_work($sp, $sf, $dp);
+      $Doc->close($infile);
    }
+
+   return 0 if !$status;
+   $Startup->msg_finish("done");
+1}
+
+sub _error { $Startup -> error (@_) if $Startup; }
+
+sub error { my ($msg) = @_; $Startup -> msg_error($msg) if $Startup; 0}
+
+sub fail {
+   my ($num) = @_;
+   print "Strange error #$num! Exiting!\n"; exit 0;
+}
+
+sub basename {
+#
+# $basename = basename($filepath)
+#
+   (substr($_[0], rindex($_[0],'/')+1) =~ /(^[^.]*)/) && $1;
+}
+
+sub usage {
+   _print_usage (
+      "$PROGNAME V$VERSION ($DATE) - Convert a Word 6+ doc to text.\n"
+      ."usage: $PROGNAME {-option [arg]} file(s)",
+      [
+        "log           write a logfile",
+        "src_base   s  Regard this as start directory in relative mode",
+        "dest_base  s  Store output files based at this directory ('".
+                       $opt{"dest_base"}."')",
+        "from_stdin    Take input from stdin",
+        "to_stdout     Write output to stdout",
+        "filemode   s  New files get access mode s (".$opt{"filemode"}.")",
+        "dirmode    s  New directories get access mode s (".$opt{"dirmode"}.")",
+        "recurse       Operate recursively on directories",
+        "relative      Store files relatively to destdir when in recurse mode",
+
+        "column     s  Output will have a width of maximal n characters.",
+        "control       Keep Word's control characters.",
+        "no_warn       No warnings.",
+        "stupid        Do not evaluate fastsave information.",
+        "override      Overwrite existing files.",
+        "suffix     s  Output files shall get suffix 's' (default: '".
+                       $opt{"suffix"}."')",
+        #"recode     s  (Recode text to character set s (in development))",
+      ]
+   );
+   exit 0;
+}
+
+sub _print_usage {
+   my ($header, $bodylistR, $footer) = @_;
+   print "$header\n" if $header;
+   print map "   --$_\n", sort { lc($a) cmp lc($b) } @$bodylistR;
+   print "$footer\n" if $footer;
 }
 
 sub main_work {
+   my ($sp, $sf, $dp) = @_;
    $header="";
    $text_warn=undef; $text_body=undef; $text_foot=undef; 
    $word_textl=0; $word_footl=0; $word_destl=0;
 
    my $wpps;
+
    is_opened: {
       last if !get_worddocument_pps(\$wpps);
       last if !$Doc->read($wpps, \$header, 0, 0x300);
+      last if !get_status();
       last if !get_document_text($wpps);
-      last if !convert_text();
-      last if !save_document($infile);
+
+      if (!$stat_unicode) {
+         last if !convert_text();
+      } else {
+         last if !map_unicode();
+      }
+      last if !save_document($sp, $sf, $dp);
       return $Doc->close();
    }
 
-   err2();
    $Doc->close();
-   0;
-}
+0}
 
-sub usage {
-   print 
-      "usage: lhalw {document}\n"
-      ."Convert a Word 6+ Document simply to text.\n"
-      ."-c n  column. Output will have a width of maximal n characters.\n"
-      ."-C    Control chars. Keep Word's control characters.\n"
-      ."-f    filter. Reads a document from stdin, writes it to stdout.\n"
-      ."-F    Filter out. Writes document(s) to stdout.\n"
-      ."-N    No warnings.\n"
-      ."-S    Stupid. Do not evaluate fastsave information.\n"
-   ;
-   exit 0;
-}
+sub get_status {
+   # Document status
+   my $status1 = get_byte(\$header, 0x05);
+   my $status2 = get_word(\$header, 0x0a);
+
+   $stat_verok   = 1 if ($status1==0xc0) || ($status1==0xe0);
+   $stat_fast    = $status2 & 2**2;
+   $stat_crypted = $status2 & 2**8;
+   $stat_unicode = $status2 & 2**9;
+
+   return _error("Document is password protected!") if $stat_crypted;
+1}
 
 sub get_worddocument_pps {
 #
@@ -128,7 +252,7 @@ sub get_worddocument_pps {
    my %dir = ();
    $Doc->directory(0, \%dir, "string");
    $$ppsR = $dir{"WordDocument"};
-   return error ("Not a Word document!") if !$$ppsR;
+   return _error ("Not a Word document!") if !$$ppsR;
 1}
 
 sub get_document_text {
@@ -137,30 +261,19 @@ sub get_document_text {
 #
    my $pps = shift;
 
-   # Document status
-   my $status1 = get_byte(\$header, 0x05);
-   my $status2 = get_word(\$header, 0x0a);
-
-   my $word_version_ok=1 if ($status1==0xc0) || ($status1==0xe0);
-   my $word_fast    = $status2 & 2**2;
-   my $word_crypted = $status2 & 2**8;
-   my $word_unicode = $status2 & 2**9;
-
-   return error("Document is password protected!") if $word_crypted;
-
-   if ($word_version_ok) {
+   if ($stat_verok ) {
       ($word_textl, $word_footl, $word_destl) = get_nlong(3, \$header, 0x34);
-      $word_textl *= 2 if $word_unicode;
-      $word_footl *= 2 if $word_unicode;
-      $word_destl *= 2 if $word_unicode;
-      if ($word_fast && !$opt_S) {
+      $word_textl *= 2 if $stat_unicode;
+      $word_footl *= 2 if $stat_unicode;
+      $word_destl *= 2 if $stat_unicode;
+      if ($stat_fast && !$opt{"stupid"}) {
          return 0 if !get_fastsaved_text($pps, \$text_body);
       } else {
          return 0 if !get_text($pps, \$text_body);
       }
    } else {
       $word_textl = get_long(\$header, 0x4c); 
-      $word_textl *= 2 if $word_unicode;
+      $word_textl *= 2 if $stat_unicode;
       return 0 if !get_text($pps, \$text_body);
    }
 
@@ -170,11 +283,11 @@ sub get_document_text {
    if ($word_textl+$word_footl < length($text_body)) {
       substr($text_body, $word_textl+$word_footl)="";
    }
-   if (!$opt_N && $l) {
+   if (!$opt{"no_warn"} && $l) {
       $lstr = abs($l)." byte" . (abs($l)>1 && "s" || "");
       $qstr = ($l>0) ? "missing" : "to much";
       $text_warn = "!! Attention: $lstr of text $qstr !!\n";
-      msg1("$lstr $qstr");
+      $Startup->msg_warn("$lstr $qstr");
    }
 1}
 
@@ -211,13 +324,24 @@ sub get_fastsaved_text {
          @fchar_o  = map (get_long(\$buf, $o+$max*4 +$_*8 +2), (0..$max-1));
          last;
       } else {
-         return error ("I don't understand this fastsave format!");
+         return _error ("I don't understand this fastsave format!");
       }
       $o+=$l;
    }
    for (0..$#fchar_o) {
       $$bufR .= substr($tmp, $fchar_o[$_], $fchar_to[$_+1]-$fchar_to[$_]);
    }
+1}
+
+##
+## --- Unicode ------------------------------------------------------------
+##
+
+sub map_unicode {
+   $Map->reverse_unicode($text_body);
+   return 1 if !$opt{"recode"};
+   return 0 if !$Map->from_unicode( $opt{"recode"}, \$text_body, \$tmp );
+   $text_body=$tmp;
 1}
 
 sub convert_text {
@@ -227,17 +351,17 @@ sub convert_text {
    }
    local($num);
 
-   if (!$opt_C) {
+   if (!$opt{"control"}) {
       silly_convert();
       strip_control(\$text_body);
       strip_control(\$text_foot);
-   }
+   } 
 
-   if ($opt_c) {
-      $Text->width($opt_c);
+   if ($opt{"column"}) {
+      $Text->width($opt{"column"});
       $Text->mode(1); 
       $Text->hyphen("-");
-      $Text->pardel($opt_C? "\x0d" : "\n");
+      $Text->pardel($opt{"control"}? "\x0d" : "\n");
       $Text->tabdel("\t");
 
       # Line breaking
@@ -276,46 +400,25 @@ sub strip_control {
 }
 
 sub save_document {
-   my $outname;
-   if ($opt_f || $opt_F) {
-      print $text_warn if ($text_warn && !$opt_N);
+   my ($sp, $sf, $dp) = @_;
+   if ($opt{"from_stdin"} || $opt{"to_stdout"}) {
+      print $text_warn if ($text_warn && !$opt{"no_warn"});
       print $text_body.$text_foot;
    } else {
-      $outname = basename(shift) . '.txt';
-      return error("Cannot open $outname!") if !(
-         open(OUT, ">".$outname) && binmode(OUT)
+      my $outname = basename($sf) . $opt{"suffix"};
+      if (!$opt{"override"}) {
+         return _error("File already exists! Try --override.") 
+            if -e "$dp/$outname"
+         ;
+      }
+      return _error("Cannot open $outname!") if !(
+         open(OUT, ">$dp/$outname") && binmode(OUT)
       );
-      print OUT $text_warn if ($text_warn && !$opt_N);
+      print OUT $text_warn if ($text_warn && !$opt{"no_warn"});
       print OUT $text_body.$text_foot;
       close OUT;
    }
-   1;
-}
-
-##
-## Little helps
-##
-
-sub msg  { !$opt_F && @_ && print (shift) || 1 }
-sub msg1 { msg( " ".(shift)."," ) }
-sub err2 {
-   msg2(shift && "ok" || error());
-}
-sub msg2 {
-   my $status = shift;
-   if ($status eq "ok") {
-      return msg(shift);
-   } else {
-      msg3("error!");
-      print "Error: $status\n" if $status;
-      return 0;
-   }
-}
-sub msg3 {
-   my $msg = shift;
-   $msg .= "\n" if ! ($msg=~/\n$/);
-   msg ( " $msg" );
-}
+1}
 
 __END__
 
@@ -325,23 +428,31 @@ lhalw - Have A Look at Word 6+ Files
 
 =head1 SYNOPSIS
 
-usage: lhalw [options] {document}
-
- -c n  column. Output will have a width of maximal n characters.
- -C    Control chars. Keep Word's control characters.
- -f    filter. Reads a document from stdin, writes it to stdout.
- -F    Filter out. Writes document(s) to stdout.
- -N    No warnings.
- -S    Stupid. Do not evaluate fastsave information.
+lhalw V0.3817 (1998/02/12) - Convert a Word 6+ doc to text.
+usage: lhalw {-option [arg]} file(s)
+   --column     s  Output will have a width of maximal n characters.
+   --control       Keep Word's control characters.
+   --dest_base  s  Store output files based at this directory ('')
+   --dirmode    s  New directories get access mode s (0700)
+   --filemode   s  New files get access mode s (0600)
+   --from_stdin    Take input from stdin
+   --log           write a logfile
+   --no_warn       No warnings.
+   --override      Overwrite existing files.
+   --recurse       Operate recursively on directories
+   --relative      Store files relatively to destdir when in recurse mode
+   --src_base   s  Regard this as start directory in relative mode
+   --stupid        Do not evaluate fastsave information.
+   --suffix     s  Output files shall get suffix 's' (default: '.txt')
+   --to_stdout     Write output to stdout
 
 =head1 DESCRIPTION
 
 Converts a Word 6+ Document simply to text. 
 
-Understands fastsaved files for Word 6 and Word 7, gets some text out
-of Word 8 documents.
-
-Option C<-N> probably is preferable to use.
+Understands and converts Word 6 and Word 7, gets some text out of Word 8 
+documents. By some purpose lhalw often sends warn messages ("... bytes too
+much"). You can switch them off with option "--no_warn".
 
 =head1 SEE ALSO
 

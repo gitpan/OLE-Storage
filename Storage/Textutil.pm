@@ -1,5 +1,5 @@
 #
-# $Id: Textutil.pm,v 0.3.8.1 1997/10/25 01:15:03 schwartz Exp $
+# $Id: Textutil.pm,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
 #
 # *Experimentary* package, handles text format documents. 
 #
@@ -8,7 +8,7 @@
 # It is actually part of Elser, a program to handle word 6 documents, but 
 # Elser is not yet ported to perl 5.
 #
-# Copyright (C) 1996, 1997 Martin Schwartz 
+# Copyright (C) 1996, 1997, 1998 Martin Schwartz 
 #
 #    This program is free software; you can redistribute it and/or modify
 #    it under the terms of the GNU General Public License as published by
@@ -32,9 +32,8 @@ package OLE::Storage::Textutil;
 use strict;
 
 sub new {
-   my ($proto, $Error) = @_;
+   my ($proto, $parH) = @_;
    my $S = bless ({}, ref($proto) || $proto);
-   $S->Error   ($Error) if $Error;
    $S->width   (-1);
    $S->white   ([" "]);
    $S->hyphen  ("-");
@@ -43,23 +42,35 @@ sub new {
    $S->pardel  ("\x0d");
    $S->tabdel  ("\x09");
    $S->mode    (0);
+   if ($parH) {
+      $S -> Startup ($parH->{"STARTUP"}) if $parH->{"STARTUP"};
+   }
    $S;
 }
       
-sub _error { 
-   my $S=shift; 
-   defined $S->{ERROR} ? $S->{ERROR}->error(@_) : 0
-}
+sub _member { my $S=shift; my $n=shift if @_; $S->{$n}=shift if @_; $S->{$n}}
 
-sub width   { my $S=shift; $S->{WIDTH}=shift  if @_; $S->{WIDTH} }
-sub white   { my $S=shift; $S->{WHITE}=shift  if @_; $S->{WHITE} }
-sub hyphen  { my $S=shift; $S->{HYPHEN}=shift if @_; $S->{HYPHEN} }
-sub newline { my $S=shift; $S->{NL}=shift     if @_; $S->{NL} }
-sub newpar  { my $S=shift; $S->{NP}=shift     if @_; $S->{NP} }
-sub pardel  { my $S=shift; $S->{PDEL}=shift   if @_; $S->{PDEL} }
-sub tabdel  { my $S=shift; $S->{TDEL}=shift   if @_; $S->{TDEL} }
-sub mode    { my $S=shift; $S->{MODE}=shift   if @_; $S->{MODE} }
-sub Error   { my $S=shift; $S->{ERROR}=shift  if @_; $S->{ERROR} }
+sub width   { shift->_member("WIDTH", @_) }
+sub white   { shift->_member("WHITE", @_) }
+sub hyphen  { shift->_member("HYPHEN", @_) }
+sub newline { shift->_member("NL", @_) }
+sub newpar  { shift->_member("NP", @_) }
+sub pardel  { shift->_member("PDEL", @_) }
+sub tabdel  { shift->_member("TDEL", @_) }
+sub mode    { shift->_member("MODE", @_) }
+
+##
+## --- Module Interfaces --------------------------------------------------
+##
+
+sub Startup { shift->_member("STARTUP", @_) }
+
+sub _error { my $S=shift; $S->{STARTUP} ? $S->{STARTUP}->error(@_) : 0 }
+sub _msg { my $S=shift; $S->Startup ? $S->Startup->msg(@_) : 0 }
+
+##
+## --- Code ---------------------------------------------------------------
+##
 
 sub wrap {
 #

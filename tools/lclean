@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#$Id: lclean,v 0.3.8.1 1997/10/25 01:15:06 schwartz Exp $
+#$Id: lclean,v 1.1.1.1 1998/02/25 21:13:00 schwartz Exp $
 #
 # lclean, Clean Structured Storage documents
 #
@@ -50,17 +50,16 @@ useress_global: {
    $global_targetdir = "doctrash"; # This is the output directory
 }
 
-sub error {
-   $Error->string();
-}
+sub error { $Startup->string() }
 
+use Startup;
 use Getopt::Std;
 use OLE::Storage::Std;
 
 global: {
    $|=1; $[=0;
-   $REV = '$Revision: 0.3.8.1 $' =~ /: ([^ ]*)/ && $1;
-   $DATE = '$Date: 1997/10/25 01:15:06 $' =~ / ..(..)\/(.{5})/ && "$2/$1";
+   $REV = '$Revision: 1.1.1.1 $' =~ /: ([^ ]*)/ && $1;
+   $DATE = '$Date: 1998/02/25 21:13:00 $' =~ / ..(..)\/(.{5})/ && "$2/$1";
    getopts ('acdefhi:lnrsz');
    usage() if !@ARGV || $opt_h;
    usage() if !@ARGV
@@ -70,9 +69,9 @@ global: {
 
    require OLE::Storage;
 
-   $Error = OLE::Storage->NewError(); 	# Error Object
-   $Var   = OLE::Storage->NewVar();	# Var Object
-   $Doc   = undef;			# Document Object
+   $Startup = new Startup;
+   $Var     = OLE::Storage->NewVar();	# Var Object
+   $Doc     = undef;			# Document Object
 
    @crc32=();
    make_crc32_table();
@@ -92,7 +91,7 @@ main: {
 
       print "Processing \"$infile\": ";
       next if !msg (
-         $Doc = OLE::Storage->open($Error, $Var, $infile, $openmode)
+         $Doc = OLE::Storage->open($Startup, $Var, $infile, $openmode)
       );
 
       block_a: {
@@ -203,7 +202,7 @@ sub save_all_trash {
 #
    my $infile = shift;
    my $outpath = get_outpath($infile);
-   return $Error->string("No savepath given!\n") if !$outpath;
+   return $Startup->err_str("No savepath given!\n") if !$outpath;
    my ($buf);
 
    # save block trash
@@ -613,7 +612,7 @@ sub save_file {
       return 1 if !$_[1];
    }
    if (! (open(OUT, '>'.$_[0]) && binmode(OUT)) ) {
-      $Error->string("Cannot save to file \"$_[0]\"!");
+      $Startup->err_str("Cannot save to file \"$_[0]\"!");
       return 0;
    }
    print OUT $_[1];
