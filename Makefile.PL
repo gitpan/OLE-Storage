@@ -4,7 +4,7 @@ use ExtUtils::MakeMaker;
 
 WriteMakefile (
    "NAME"      => "OLE::Storage",
-   "VERSION"   => "0.385",
+   "VERSION"   => "0.386",
    "dist"      => {
       "COMPRESS" => "gzip", 
       "SUFFIX"   => "gz"

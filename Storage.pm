@@ -1,5 +1,5 @@
 #
-# $Id: Storage.pm,v 1.7 1998/03/24 02:47:14 schwartz Exp $
+# $Id: Storage.pm,v 1.8 1998/04/28 00:39:43 schwartz Exp $
 #
 # OLE::Storage, a Structured Storage interface 
 #
@@ -57,7 +57,7 @@
 #
 
 package OLE::Storage;
-my $VERSION=do{my@R=('$Revision: 1.7 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $VERSION=do{my@R=('$Revision: 1.8 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
 $[=0;
 
 #  
@@ -921,7 +921,7 @@ __END__
 
 OLE::Storage - An Interface to B<Structured Storage> Documents.
 
-$Revision: 1.7 $ $Date: 1998/03/24 02:47:14 $
+$Revision: 1.8 $ $Date: 1998/04/28 00:39:43 $
 
 =head1 SYNOPSIS
 
@@ -965,6 +965,12 @@ Close the document.
 I<$clsid> == I<$D> -> clsid (I<$pps>)
 
 Returns the CLSID of the property I<$pps> as CLSID Property.
+
+=item color
+
+C<0>||C<1> == I<$D> -> color (I<$pps>)
+
+Returns the "color" of the property I<$pps>.
 
 =item date
 

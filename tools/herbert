@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#$Id: herbert,v 1.38 1998/03/24 02:49:05 schwartz Exp $
+#$Id: herbert,v 1.43 1998/04/28 01:30:33 schwartz Exp $
 #
 # Herbert - Converts a simple Excel document to some kind of HTML.
 #
@@ -30,8 +30,8 @@
 #
 
 my $PROGNAME = "Herbert";
-my $VERSION=do{my@R=('$Revision: 1.38 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
-my $DATE = ('$Date: 1998/03/24 02:49:05 $' =~ / ([^ ]*) /) && $1;
+my $VERSION=do{my@R=('$Revision: 1.43 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $DATE = ('$Date: 1998/04/28 01:30:33 $' =~ / ([^ ]*) /) && $1;
 
 no strict; $^W=0;
 use Getopt::Long;
@@ -130,7 +130,7 @@ sub handle_files {
    $Startup->msg_reset();
    $Startup->msg_silent(1) if $opt{"to_stdout"};
 
-   $Startup->log("processing $sp/$sf");
+   $Startup->log("processing ".($sp ne "." ? "$sp/":"").$sf);
    $Startup->msg("Processing \"$sf\"");
 
    return $Startup->error ("File \"$sf\" doesn't exist!") unless $status;
@@ -138,7 +138,6 @@ sub handle_files {
    return 0 unless main_work($sp, $sf, $dp);
 
    $Startup->msg_finish("done");
-   $Startup->log("done");
 1}
 
 sub main_work {
@@ -350,21 +349,18 @@ sub Sheet_to_HTML() {
 
             { # FG_COL_NO
                unless ($opt{"nocellcolor"}||$opt{"nocolor"}) {
-                  my $color = $Font->{"FG_COL_NO"};
-                  last if $color==32767;
-                  $color-=8 if $color>=8;
-                  last if $color == $default_fg_color;  
-                  $font_open.=sprintf(" COLOR=#%06x", $Book->color->[$color]);
+                  my $color = ColorIdx_to_RGBColor( 
+                     $Font->{"FG_COL_NO"}, $default_fg_color
+                  );
+                  last unless defined $color;
+                  $font_open.=sprintf(" COLOR=#%06x", $color);
                }
             }
 
             { # BG_COL_NO
                unless ($opt{"nocellcolor"}||$opt{"nocolor"}) {
-                  my $color = $bg_col_no;
-                  $color -= 8 if $bg_col_no >= 8;
-                  last if $color == 1; # assume color 1 to be default...
-                  my $color = $Book->color->[$color];
-                  last if !defined $color;
+                  my $color = ColorIdx_to_RGBColor($bg_col_no);
+                  last unless defined $color;
                   $td_open.=sprintf(" BGCOLOR=#%06x", $color);
                }
             }
@@ -502,6 +498,23 @@ sub Sheet_to_HTML() {
    $text .= "</TABLE><p>\n</BODY></HTML>";
 1}
 
+sub ColorIdx_to_RGBColor {
+#
+# $RGBColor || undef = ColorIdx_to_RGBColor ($color_idx [,$default_color_idx])
+#
+   my ($idx, $default_idx) = @_;
+   $default_idx = 1 unless defined $default_idx; # color 1 is set default
+   {
+      last if $idx==32767;
+      $idx-=8 if $idx>=8;
+      last if $idx == $default_idx;
+      my $color = $Book->color->[$idx];
+      last if !defined $color;
+      return $color;
+   }
+   undef;
+}
+
 package herbert;
 
 use OLE::Storage();
@@ -523,7 +536,7 @@ BEGIN {
 ##          "FONT_NO" => $index,
 ##          "FORM_NO" => $index,
 ##          "H_ALIGN" => "l"|"c"|"r"|"j";	# default: "l" == "left"
-##          "V_ALIGN" => "t"|c"|"b"|"j";	# default: "t" == "top"
+##          "V_ALIGN" => "t"|"c"|"b"|"j";	# default: "t" == "top"
 ##       }
 ##    ],
 ##    font      => {
@@ -611,13 +624,14 @@ sub open_document {
    } else {
       if (!$S->Buf) {
          my $buf = "";
+         my $BIFF = gensym;
          my $status = 0;
          { 
-            last unless open (BIFF, $S->DocPath);
-            last unless binmode (BIFF);
-            $status = (read (BIFF, $buf, -s $S->DocPath) == -s $S->DocPath);
+            last unless open ($BIFF, $S->DocPath);
+            last unless binmode ($BIFF);
+            $status = (read ($BIFF, $buf, -s $S->DocPath) == -s $S->DocPath);
          }
-         close (BIFF);
+         close ($BIFF);
          return $S->Startup->error("Read error!") if !$status;
          $S->Buf($buf);
       }
@@ -684,18 +698,17 @@ sub add_format {
    my ($S, $idx, $str) = @_;
    my $num = $S->num_of_formats ($S->num_of_formats +1);
    $S -> format -> [$idx] -> {"STR"} = $str;
-   #$S -> dump_format ($idx);
+   # $S -> dump_format ($idx);
 }
 
 sub dump_format {
    my ($S, $num) = @_;
-   printf ("Format number %02x\n", $num);
+   printf ("Format %02x: ", $num);
    if (defined $S->format->[$num]) {
-      printf ("   STR = '%s'\n", $S->format->[$num]->{STR});
+      printf ("'%s'\n", $S->format->[$num]->{STR});
    } else {
-      print "   Not defined!\n";
+      print "Not defined!\n";
    }
-   print "\n";
    $S -> format -> [$num];
 }
 
@@ -998,6 +1011,16 @@ sub parse {
          # 04 word  width of column (1366 =^ 1 cm)
          # 06 byte[5] unknown
          #
+      } elsif (0x007e == $type) { # Cell: RK number
+         #
+         # 00 word   row
+         # 02 word   column
+         # 04 word   style #
+         # 06 long   RK number (Intel format)
+         #
+         ($row, $col, $style, $RK) = get_struct("WWWL", \$buf, $o);
+         $S -> Cell_XF   ($row+1, $col+1, $style);
+         $S -> Cell_Text ($row+1, $col+1+$_-1, ""._RK_to_num($RK));
       } elsif (0x0085 == $type) { # Doc: Table
          #
          # 00 long        offset    Table starts at this offset
@@ -1020,6 +1043,32 @@ sub parse {
          my $num = get_word(\$buf, $o);
          my @colors = get_nlong($num, \$buf, $o+2);
          $S -> load_colormap (\@colors);
+      } elsif (0x00bd == $type) { # Cell: Multiple RK
+         #
+         # 00 word   row
+         # 02 word   column begin
+         # 04 RK[]
+         # n  word   column end
+         #
+         # RK
+         # 00 word   style #
+         # 02 long   RK number (Intel format)
+         #
+         ($row, $col) = get_nword(2, \$buf, $o);
+         my $n = ($l - 6) / 6;
+         for (1..$n) {
+            ($style, $RK) = get_struct("WL", \$buf, $o+4+($_-1)*6);
+            $S -> Cell_XF   ($row+1, $col+1+$_-1, $style);
+            $S -> Cell_Text ($row+1, $col+1+$_-1, ""._RK_to_num($RK));
+         }
+      } elsif (0x00be == $type) { # Cell: multiple empty
+         ($row, $col) = get_nword(2, \$buf, $o);
+         my $n = ($l - 6) / 2;
+         my @style = get_nword($n, \$buf, $o+4);
+         for (1..$n) {
+            $S -> Cell_XF    ($row+1, $col+1+$_-1, $style[$_-1]);
+            $S -> Cell_Text  ($row+1, $col+1+$_-1, "");
+         }
       } elsif (0x00e0 == $type) { # Document: Extended Format
          #
          # 00 word    font index
@@ -1163,6 +1212,17 @@ sub parse {
       0  # assume color 0 to be default... 
    );
 1}
+
+sub _RK_to_num {
+   my ($RK) = @_;
+   my $type = $RK & 0x3; 
+   my $val = ($type & 2) ?
+      int($RK/4)
+      : unpack(OLE::Storage::Std::D, "\0\0\0\0".long($RK ^ $type))
+   ;
+   $val /= 100.0 if $type &1;
+   $val;
+}
 
 sub _float_to_date { # F
    my ($date) = @_;

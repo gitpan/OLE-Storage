@@ -1,5 +1,5 @@
 #!/usr/bin/perl
-#$Id: lhalw,v 1.2 1998/03/23 02:53:47 schwartz Exp $
+#$Id: lhalw,v 1.6 1998/04/28 01:13:55 schwartz Exp $
 #
 # lhalw, Have A Look at Word 6+ Files
 #
@@ -10,8 +10,8 @@
 # -  The purpose of lhalw is mainly to demonstrate OLE::Storage, not so
 #    much to convert a word file. Anyway at least it handles the text portions
 #    of Word 6 / 7 files quite correctly. If you need a real convertress, 
-#    look for my program "Elser". You might like to use lhalw anyway, as 
-#    "real" of course is a euphemism for "big and slow" ;)
+#    you will have to wait... I'm working on it, but it lasts longer than
+#    I excpected. 
 #
 # -  lhalw informs you a little bit about the trouble while converting.
 #
@@ -42,8 +42,8 @@ my ($Doc, $Msg, $Startup, $Text, $Unicode, $Var);
 my ($stat_fast, $stat_crypted, $stat_unicode, $stat_verok);
 
 my $PROGNAME = "lhalw";
-my $VERSION=do{my@R=('$Revision: 1.2 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
-my $DATE = ('$Date: 1998/03/23 02:53:47 $' =~ / ([^ ]*) /) && $1;
+my $VERSION=do{my@R=('$Revision: 1.6 $'=~/\d+/g);sprintf"%d."."%d"x$#R,@R};
+my $DATE = ('$Date: 1998/04/28 01:13:55 $' =~ / ([^ ]*) /) && $1;
 
 use Getopt::Long;
 use OLE::Storage::Std;
@@ -53,6 +53,7 @@ my %opt = (
    "dirmode"   => "0700",
    "filemode"  => "0600",
    "suffix"    => ".txt",
+   "warnlevel" => "1",
 );
 
 {
@@ -70,10 +71,11 @@ my %opt = (
       "recurse|recursive",
       "column=s",
       "control",
-      "no_warn",
+      "warnlevel=i",
       "stupid",
       "recode=s",
       "suffix=s",
+      "no_warn", 	# old and no longer supported
    );
    usage() if $opt{"help"} || (!@ARGV && !$opt{"from_stdin"});
 
@@ -112,6 +114,8 @@ my %opt = (
    }
    $Doc = undef;
 
+   $Startup->msg_silent(1) if $opt{"to_stdout"};
+
    $Startup->go(@ARGV);
 
    $Startup->close_log();
@@ -121,7 +125,6 @@ my %opt = (
 sub handle_stream {
    my ($dp) = @_;
    $Startup->log('processing <STDIN>');
-   $Startup->msg_silent(1);
    $Startup->msg('processing <STDIN>');
    {
       return _error("Nothing to do!") if -t STDIN;
@@ -136,9 +139,9 @@ sub handle_stream {
 
 sub handle_files {
    my ($sp, $sf, $dp, $status) = @_;
-   $Startup->msg_reset();
+   $Startup->msg_reset;
 
-   $Startup->log("processing $sp/$sf");
+   $Startup->log("processing " . ($sp ne "." ? "$sp/":"") . $sf);
    $Startup->msg("Processing \"$sf\"");
 
    return _error ("File \"$sf\" doesn't exist!") if !$status;
@@ -187,7 +190,7 @@ sub usage {
 
         "column     s  Output will have a width of maximal n characters.",
         "control       Keep Word's control characters.",
-        "no_warn       No warnings.",
+        "warnlevel  i  0=no | 1=standard | 2=paranoid warnings (default 1)",
         "stupid        Do not evaluate fastsave information.",
         "override      Overwrite existing files.",
         "suffix     s  Output files shall get suffix 's' (default: '".
@@ -208,7 +211,8 @@ sub _print_usage {
 sub main_work {
    my ($sp, $sf, $dp) = @_;
    $header="";
-   $text_warn=undef; $text_body=undef; $text_foot=undef; 
+   $text_warn=undef; $warn=0;
+   $text_body=undef; $text_foot=undef; 
    $word_textl=0; $word_footl=0; $word_destl=0;
 
    my $wpps;
@@ -283,11 +287,25 @@ sub get_document_text {
    if ($word_textl+$word_footl < length($text_body)) {
       substr($text_body, $word_textl+$word_footl)="";
    }
-   if (!$opt{"no_warn"} && $l) {
+   if ($l) {
+      if (($l<0) && ($l>-4)) {
+         $warn = 1;
+      } else {
+         $warn = 2;
+      }
+   }
+   if ($warn) {
       $lstr = abs($l)." byte" . (abs($l)>1 && "s" || "");
       $qstr = ($l>0) ? "missing" : "to much";
-      $text_warn = "!! Attention: $lstr of text $qstr !!\n";
-      $Startup->msg_warn("$lstr $qstr");
+      $pri = " ";
+      if ($warn > 1) {
+         $pri = "!";
+         if ($opt{"warnlevel"}>1) {
+            $text_warn = "!! Attention: $lstr of text $qstr !!\n";
+            $Startup->msg_warn("$lstr $qstr");
+         }
+      }
+      $Startup -> log ("$lstr of text $qstr", $pri);
    }
 1}
 
@@ -402,7 +420,7 @@ sub strip_control {
 sub save_document {
    my ($sp, $sf, $dp) = @_;
    if ($opt{"from_stdin"} || $opt{"to_stdout"}) {
-      print $text_warn if ($text_warn && !$opt{"no_warn"});
+      print $text_warn if $text_warn && ($warn > $opt{"warnlevel"});
       print $text_body.$text_foot;
    } else {
       my $outname = basename($sf) . $opt{"suffix"};
@@ -414,7 +432,7 @@ sub save_document {
       return _error("Cannot open $outname!") if !(
          open(OUT, ">$dp/$outname") && binmode(OUT)
       );
-      print OUT $text_warn if ($text_warn && !$opt{"no_warn"});
+      print OUT $text_warn if $text_warn && ($warn > $opt{"warnlevel"});
       print OUT $text_body.$text_foot;
       close OUT;
    }
@@ -452,7 +470,7 @@ Converts a Word 6+ Document simply to text.
 
 Understands and converts Word 6 and Word 7, gets some text out of Word 8 
 documents. By some purpose lhalw often sends warn messages ("... bytes too
-much"). You can switch them off with option "--no_warn".
+much"). You can switch them off with option "--warnlevel=0".
 
 =head1 SEE ALSO
 

@@ -1,6 +1,9 @@
 
 Changes of Laola distribution:
 
+OLE-Storage-0.386 (28.4.98)
+   +  Little improvements and fixes at lhalw and Herbert
+
 OLE-Storage-0.385 (24.3.98)
    +  Herbert supports now Excel 2 to Excel 97 formats,
       combined cells are recognized and converted.
